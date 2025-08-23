@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+
+# Virtual environment
+venv*/
+ENV/
+.env/
+.venv/
+
+# Jupyter and notebook checkpoints
+.ipynb_checkpoints/
+
+# Data and model files
+*.pkl
+*.h5
+*.csv
+face_embeddings/
+data/attendance.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
