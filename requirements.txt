@@ -1,0 +1,8 @@
+opencv-python
+mtcnn
+deepface
+scikit-learn
+psutil
+tf-keras
+numpy
+pillow

@@ -9,16 +9,26 @@ from deepface import DeepFace
 from mtcnn import MTCNN
 from sklearn.metrics.pairwise import cosine_similarity
 import threading
+import logging
 
 # -------------------- CONFIGURATION --------------------
+MODEL_NAME = 'Facenet'  # Change to 'SFace' or 'ArcFace' for lighter models
+FRAME_SKIP = 2  # Only run recognition every N frames
+SIMILARITY_THRESHOLD = 0.7
+STABLE_FRAMES = 10
+LOG_LEVEL = logging.INFO
+
 DATA_DIR = "face_embeddings"
 embeddings_path = os.path.join(DATA_DIR, "embeddings.pkl")
 attendance_file = os.path.join('data', 'attendance.csv')
 os.makedirs('data', exist_ok=True)
 
+# -------------------- LOGGING SETUP --------------------
+logging.basicConfig(level=LOG_LEVEL, format='[%(levelname)s] %(message)s')
+
 # -------------------- LOAD EMBEDDINGS --------------------
 if not os.path.exists(embeddings_path):
-    print("[ERROR] No embeddings found. Run add_faces.py first.")
+    logging.error("No embeddings found. Run add_faces.py first.")
     exit()
 
 with open(embeddings_path, "rb") as f:
@@ -36,7 +46,9 @@ all_embeddings = np.array(all_embeddings)
 print(f"[DEBUG] Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} people: {set(all_labels)}")
 
 # -------------------- FACE DETECTION SETUP --------------------
-detector = MTCNN()  # You can switch to a faster detector if needed
+detector = MTCNN()
+# Preload DeepFace model
+_ = DeepFace.build_model(MODEL_NAME)
 
 # -------------------- ATTENDANCE SESSION --------------------
 session_active = False
@@ -52,36 +64,71 @@ stop_threads = False
 draw_faces = []  # Each item: (box, identity, similarity, last_seen)
 STABLE_FRAMES = 10
 
+# -------------------- ATTENDANCE LOGGING BUFFER --------------------
+attendance_buffer = []
+BUFFER_SIZE = 5
+
+def flush_attendance():
+    global attendance_buffer
+    if attendance_buffer:
+        with open(attendance_file, 'a') as f:
+            for entry in attendance_buffer:
+                f.write(entry)
+        attendance_buffer = []
+
 # -------------------- BACKGROUND FACE RECOGNITION THREAD --------------------
 def recognize_faces():
     global frame, result, draw_faces
+    frame_counter = 0
     while not stop_threads:
         if frame is not None:
+            frame_counter += 1
+            if frame_counter % FRAME_SKIP != 0:
+                time.sleep(0.01)
+                continue
             with result_lock:
                 local_frame = frame.copy()
             rgb_frame = cv2.cvtColor(local_frame, cv2.COLOR_BGR2RGB)
             faces = detector.detect_faces(rgb_frame)
             new_draw_faces = []
+            face_imgs = []
+            face_boxes = []
+            # Collect all face images and their boxes
             for face in faces:
                 x, y, w, h = face['box']
+                # Skip faces with zero or negative width/height
+                if w <= 0 or h <= 0:
+                    continue
                 x, y = max(0, x), max(0, y)
                 face_img = rgb_frame[y:y+h, x:x+w]
+                face_imgs.append(cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR))
+                face_boxes.append((x, y, w, h))
+            # Batch process embeddings if faces found
+            if face_imgs:
                 try:
-                    face_bgr = cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR)
-                    embedding = DeepFace.represent(face_bgr, model_name='Facenet', enforce_detection=False)[0]["embedding"]
-                    embedding = np.array(embedding)
-                    embedding = embedding / np.linalg.norm(embedding)
-                    identity = "Unknown"
-                    max_similarity = 0
-                    if len(all_embeddings) > 0:
-                        sims = cosine_similarity([embedding], all_embeddings)[0]
-                        best_idx = np.argmax(sims)
-                        max_similarity = sims[best_idx]
-                        if max_similarity >= 0.7:
-                            identity = all_labels[best_idx]
-                    new_draw_faces.append(((x, y, w, h), identity, max_similarity, time.time()))
+                    reps = DeepFace.represent(face_imgs, model_name=MODEL_NAME, enforce_detection=False)
+                    for i, rep in enumerate(reps):
+                        # Defensive: rep may be a dict or a list (if detection failed)
+                        embedding = None
+                        if isinstance(rep, dict) and "embedding" in rep:
+                            embedding = np.array(rep["embedding"])
+                        elif isinstance(rep, list) and len(rep) > 0 and isinstance(rep[0], dict) and "embedding" in rep[0]:
+                            embedding = np.array(rep[0]["embedding"])
+                        if embedding is not None:
+                            embedding = embedding / np.linalg.norm(embedding)
+                            identity = "Unknown"
+                            max_similarity = 0
+                            if len(all_embeddings) > 0:
+                                sims = cosine_similarity([embedding], all_embeddings)[0]
+                                best_idx = np.argmax(sims)
+                                max_similarity = sims[best_idx]
+                                if max_similarity >= SIMILARITY_THRESHOLD:
+                                    identity = all_labels[best_idx]
+                            new_draw_faces.append((face_boxes[i], identity, max_similarity, time.time()))
+                        else:
+                            logging.warning(f"No embedding returned for face {i} in batch.")
                 except Exception as e:
-                    pass
+                    logging.warning(f"Recognition error: {e}")
             with result_lock:
                 draw_faces = new_draw_faces
         time.sleep(0.01)
@@ -123,12 +170,13 @@ while True:
                 cv2.putText(new_frame, f"{identity} {similarity:.2f}", (x, y-10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                 # Attendance logic for each face
-                if session_active and identity != "Unknown" and identity not in marked_names:
+                if session_active and identity != "Unknown" and identity not in marked_names and similarity >= 0.85:
                     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    with open(attendance_file, 'a') as f:
-                        f.write(f"{identity},{timestamp}\n")
+                    attendance_buffer.append(f"{identity},{timestamp}\n")
+                    if len(attendance_buffer) >= BUFFER_SIZE:
+                        flush_attendance()
                     marked_names.add(identity)
-                    print(f"[INFO] Marked attendance for {identity} at {timestamp}")
+                    logging.info(f"Marked attendance for {identity} at {timestamp}")
 
     # Show CPU, memory, FPS, and session status
     cpu = psutil.cpu_percent()
@@ -159,6 +207,9 @@ stop_threads = True
 recognition_thread.join()
 cap.release()
 cv2.destroyAllWindows()
+
+# After the main loop, flush any remaining attendance:
+flush_attendance()
 
 
 
