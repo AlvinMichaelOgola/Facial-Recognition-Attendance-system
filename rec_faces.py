@@ -27,6 +27,18 @@ os.makedirs('data', exist_ok=True)
 logging.basicConfig(level=LOG_LEVEL, format='[%(levelname)s] %(message)s')
 
 # -------------------- LOAD EMBEDDINGS --------------------
+
+# Load only active users from user_info.csv
+import csv
+active_names = set()
+user_info_path = os.path.join(DATA_DIR, "user_info.csv")
+if os.path.exists(user_info_path):
+    with open(user_info_path, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            if row.get('Active', '1').strip() == '1':
+                active_names.add(row['Name'])
+
 if not os.path.exists(embeddings_path):
     logging.error("No embeddings found. Run add_faces.py first.")
     exit()
@@ -34,16 +46,17 @@ if not os.path.exists(embeddings_path):
 with open(embeddings_path, "rb") as f:
     saved_faces = pickle.load(f)
 
-# Flatten all embeddings with their labels
+# Flatten all embeddings with their labels, only for active users
 all_embeddings = []
 all_labels = []
 for name, embeddings_list in saved_faces.items():
-    for emb in embeddings_list:
-        all_embeddings.append(emb)
-        all_labels.append(name)
+    if name in active_names:
+        for emb in embeddings_list:
+            all_embeddings.append(emb)
+            all_labels.append(name)
 all_embeddings = np.array(all_embeddings)
 
-print(f"[DEBUG] Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} people: {set(all_labels)}")
+print(f"[DEBUG] Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} active people: {set(all_labels)}")
 
 # -------------------- FACE DETECTION SETUP --------------------
 detector = MTCNN()
