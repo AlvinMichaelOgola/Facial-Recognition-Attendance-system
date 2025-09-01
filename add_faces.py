@@ -1,53 +1,41 @@
+
+
+
 import cv2
-import os
-import pickle
 import numpy as np
-import csv
 from deepface import DeepFace
 from mtcnn import MTCNN
-from datetime import datetime
+import sys
+from user_data_manager import UserDataManager
+import logging
+
+# Setup error logging
+logging.basicConfig(filename='face_capture_errors.log',
+                    level=logging.ERROR,
+                    format='%(asctime)s %(levelname)s: %(message)s')
 
 # -------------------- CONFIGURATION --------------------
-DATA_DIR = "face_embeddings"
-EMBEDDINGS_PATH = os.path.join(DATA_DIR, "embeddings.pkl")
-CSV_PATH = os.path.join(DATA_DIR, "user_info.csv")
 MAX_FRAMES = 50
 
-# -------------------- SETUP --------------------
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# Load existing embeddings if available
-if os.path.exists(EMBEDDINGS_PATH):
-    with open(EMBEDDINGS_PATH, "rb") as f:
-        saved_faces = pickle.load(f)
+# -------------------- USER INPUT --------------------
+# Expect only student_id from command-line arguments
+if len(sys.argv) >= 2:
+    student_id = sys.argv[1]
 else:
-    saved_faces = {}
+    raise RuntimeError("student_id must be provided by the GUI as a command-line argument.")
+
+# -------------------- SETUP --------------------
+data_manager = UserDataManager()
 
 # Load FaceNet model once for speed
 facenet_model = DeepFace.build_model('Facenet')
-
 # Initialize MTCNN for face detection
-# (DeepFace can also detect, but you use MTCNN for consistency)
 detector = MTCNN()
-
-# -------------------- USER INPUT --------------------
-import sys
-# Expect user details from command-line arguments (from GUI)
-if len(sys.argv) >= 9:
-    person_name = sys.argv[1]
-    student_id = sys.argv[2]
-    email = sys.argv[3]
-    phone = sys.argv[4]
-    department = sys.argv[5]
-    year = sys.argv[6]
-    role = sys.argv[7]
-    registration_date = sys.argv[8]
-else:
-    raise RuntimeError("User details must be provided by the GUI as command-line arguments.")
 
 # -------------------- CAMERA SETUP --------------------
 cap = cv2.VideoCapture(0)
 print("\nPress 's' to start capturing faces. Press 'q' to quit.")
+
 
 # Wait for 's' key to start
 while True:
@@ -64,7 +52,7 @@ while True:
         cv2.destroyAllWindows()
         exit()
 
-print(f"\n🎥 Capturing up to {MAX_FRAMES} frames for {person_name}. Press 'q' to quit early.")
+print(f"\n🎥 Capturing up to {MAX_FRAMES} frames for student_id {student_id}. Press 'q' to quit early.")
 count = 0
 
 while count < MAX_FRAMES:
@@ -78,21 +66,29 @@ while count < MAX_FRAMES:
         largest_face = max(faces, key=lambda f: f['box'][2] * f['box'][3])
         x, y, w, h = largest_face['box']
         x, y = max(0, x), max(0, y)
-        face_img = rgb_frame[y:y+h, x:x+w]
-        try:
-            face_bgr = cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR)
-            embedding = DeepFace.represent(face_bgr, model_name='Facenet', enforce_detection=False)[0]["embedding"]
-            if person_name not in saved_faces:
-                saved_faces[person_name] = []
-            saved_faces[person_name].append(embedding)
-            count += 1
-            # Always show green border for added face
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame, f"{person_name} ({count})", (x, y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        except Exception as e:
-            cv2.putText(frame, "Error: Face skipped", (x, y-10),
+        # Minimum face size check (e.g., 80x80 pixels)
+        MIN_FACE_SIZE = 80
+        if w < MIN_FACE_SIZE or h < MIN_FACE_SIZE:
+            cv2.putText(frame, "Face too small", (x, y-10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        else:
+            face_img = rgb_frame[y:y+h, x:x+w]
+            try:
+                face_bgr = cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR)
+                embedding = DeepFace.represent(face_bgr, model_name='Facenet', enforce_detection=False)[0]["embedding"]
+                # Save embedding to database
+                data_manager.add_face_embedding(student_id, embedding)
+                count += 1
+                # Always show green border for added face
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(frame, f"{student_id} ({count})", (x, y-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            except Exception as e:
+                error_msg = f"Face skipped for student_id {student_id} due to error: {e}"
+                print(error_msg)
+                logging.error(error_msg)
+                cv2.putText(frame, "Error: Face skipped", (x, y-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
     # Show frame
     cv2.putText(frame, f"Frames captured: {count}/{MAX_FRAMES}", (10, frame.shape[0]-10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
@@ -100,18 +96,6 @@ while count < MAX_FRAMES:
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Save embeddings
-with open(EMBEDDINGS_PATH, "wb") as f:
-    pickle.dump(saved_faces, f)
-
-# Save user info to CSV
-write_header = not os.path.exists(CSV_PATH)
-with open(CSV_PATH, 'a', newline='') as csvfile:
-    writer = csv.writer(csvfile)
-    if write_header:
-        writer.writerow(["Name", "StudentID", "Email", "Phone", "Department", "Year", "Role", "RegistrationDate"])
-    writer.writerow([person_name, student_id, email, phone, department, year, role, registration_date])
-
-print(f"\n[INFO] Saved embeddings for {person_name}, total faces captured: {count}")
+print(f"\n[INFO] Saved embeddings for student_id {student_id}, total faces captured: {count}")
 cap.release()
 cv2.destroyAllWindows()
