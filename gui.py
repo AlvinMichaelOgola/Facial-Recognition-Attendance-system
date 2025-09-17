@@ -1,508 +1,634 @@
+"""
+gui.py
+
+Tkinter-based GUI for Facial Recognition Attendance System (MVP)
+This file expects `user_data_manager.py` (with DatabaseManager and UserDataManager)
+to be present in the same folder and pointed at your MySQL/MariaDB instance.
+
+Features:
+- Login screen (basic email+password check against users table)
+- Dashboard with left side panel (Add User, Manage Users, Start Attendance, Logout)
+- Add User (student) form (calls UserDataManager.add_user)
+- Manage Users table (list, search, toggle active, edit)
+- Edit user dialog (update user and student tables via user_data_manager.update_user)
+- Launch external face-capture script (add_faces.py) via subprocess with student_id arg
+- Minimal inline comments for extensibility
+
+Notes / Assumptions:
+- The DB schema must include `users` and `students` tables as per your earlier spec.
+- Passwords in DB are assumed to be stored in plain text for MVP (replace with hashes in prod).
+- `UserDataManager` is used for CRUD operations. If method names differ, adapt calls.
+- Recognition module (camera & matching) is external: GUI launches it via subprocess.
+"""
+
 import tkinter as tk
 from tkinter import ttk, messagebox
+import subprocess
+import sys
 import os
-from user_data_manager import UserDataManager
+import re
+from datetime import datetime
 
-class LoginWindow:
-    def __init__(self, on_success):
-        self.on_success = on_success
-        self.root = tk.Tk()
-        self.root.title("Facial Recognition Attendance System - Login")
-        self.root.geometry("900x600")
-        self.root.configure(bg="#fff")
-        tk.Label(self.root, text="Admin Login", font=("Arial", 18), bg="#fff").pack(pady=30)
-        tk.Label(self.root, text="Email:", bg="#fff").pack(pady=10)
+# Import the DB-backed manager you posted earlier (DatabaseManager, UserDataManager)
+from user_data_manager import DatabaseManager, UserDataManager
+
+
+# -------------------------
+# Utility functions
+# -------------------------
+def resource_path(filename):
+    """Return absolute path for filename located next to this script."""
+    return os.path.join(os.path.dirname(__file__), filename)
+
+
+# -------------------------
+# Authentication helpers
+# -------------------------
+def authenticate_admin(email: str, password: str, db_manager: DatabaseManager) -> dict:
+    """
+    Very small authentication helper:
+    - Looks up user by email in users table and checks password (MVP: plaintext).
+    - Returns user dict if authenticated, else None.
+
+    NOTE: In production replace with proper password hashing (bcrypt) and secure checks.
+    """
+    if not email or not password:
+        return None
+
+    query = "SELECT * FROM users WHERE email=%s LIMIT 1"
+    try:
+        with db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (email,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                # NOTE: row['password'] is expected to be stored in DB (plaintext for MVP)
+                stored = row.get("password") or row.get("pwd") or ""
+                if stored == password:
+                    return row
+                # if stored is hashed, adapt this function to verify via admin_security_manager
+                return None
+    except Exception as e:
+        # bubble up or return None
+        print(f"[auth] DB error: {e}")
+        return None
+
+
+# -------------------------
+# Main Application manager
+# -------------------------
+class Application(tk.Tk):
+    def __init__(self, db_manager=None):
+        super().__init__()
+        self.title("Facial Recognition Attendance System")
+        self.geometry("1100x700")
+        self.configure(bg="#f0f2f5")
+
+        # Database manager and user manager (DB-backed)
+        self.db_manager = db_manager or DatabaseManager()
+        self.user_manager = UserDataManager(self.db_manager)
+
+        # Currently logged-in admin info (dict)
+        self.current_user = None
+
+        # Frame holder
+        self.container = tk.Frame(self)
+        self.container.pack(fill="both", expand=True)
+
+        # Start with Login
+        self.show_login()
+
+    def show_login(self):
+        # Destroy any existing frames in container
+        for widget in self.container.winfo_children():
+            widget.destroy()
+        login = LoginFrame(self.container, app=self)
+        login.pack(fill="both", expand=True)
+
+    def show_dashboard(self):
+        for widget in self.container.winfo_children():
+            widget.destroy()
+        dash = DashboardFrame(self.container, app=self)
+        dash.pack(fill="both", expand=True)
+
+
+# -------------------------
+# Login Frame
+# -------------------------
+class LoginFrame(tk.Frame):
+    def __init__(self, parent, app: Application):
+        super().__init__(parent, bg="#ffffff")
+        self.app = app
+        self.db_manager = app.db_manager
+
+        # UI layout
+        left = tk.Frame(self, bg="#2c3e50", width=340)
+        left.pack(side="left", fill="y")
+
+        right = tk.Frame(self, bg="#ffffff")
+        right.pack(side="right", fill="both", expand=True)
+
+        # Left branding panel
+        tk.Label(left, text="FRS", font=("Helvetica", 36, "bold"), fg="white", bg="#2c3e50").pack(pady=(60, 6))
+        tk.Label(left, text="Facial Recognition\nAttendance", font=("Helvetica", 12), fg="white", bg="#2c3e50").pack()
+        tk.Label(left, text="Alpha 2", fg="white", bg="#2c3e50").pack(side="bottom", pady=20)
+
+        # Right login form
+        form = tk.Frame(right, bg="#ffffff", padx=40, pady=40)
+        form.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(form, text="Admin / Lecturer Login", font=("Arial", 16), bg="#ffffff").grid(row=0, column=0, columnspan=2, pady=(0, 12))
+
+        tk.Label(form, text="Email:", bg="#ffffff").grid(row=1, column=0, sticky="e", pady=6)
         self.email_var = tk.StringVar()
-        email_entry = tk.Entry(self.root, textvariable=self.email_var, font=("Arial", 12))
-        email_entry.pack(pady=5)
-        tk.Label(self.root, text="Password:", bg="#fff").pack(pady=10)
+        tk.Entry(form, textvariable=self.email_var, width=36).grid(row=1, column=1, pady=6)
+
+        tk.Label(form, text="Password:", bg="#ffffff").grid(row=2, column=0, sticky="e", pady=6)
         self.pwd_var = tk.StringVar()
-        pwd_entry = tk.Entry(self.root, textvariable=self.pwd_var, show='*', font=("Arial", 12))
-        pwd_entry.pack(pady=5)
-        login_btn = tk.Button(self.root, text="Login", font=("Arial", 12), command=self.check_login)
-        login_btn.pack(pady=20)
-        pwd_entry.bind('<Return>', lambda e: self.check_login())
-        email_entry.focus()
-        reg_btn = tk.Button(self.root, text="Register Admin", font=("Arial", 12), command=self.open_admin_registration)
-        reg_btn.pack(pady=10)
-        self.root.mainloop()
+        pw_entry = tk.Entry(form, textvariable=self.pwd_var, show="*", width=36)
+        pw_entry.grid(row=2, column=1, pady=6)
+        pw_entry.bind("<Return>", lambda e: self.attempt_login())
+
+        btn_frame = tk.Frame(form, bg="#ffffff")
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=12)
+
+        tk.Button(btn_frame, text="Login", width=12, command=self.attempt_login).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Register Admin", width=14, command=self.open_admin_registration).pack(side="left", padx=6)
+
+    def attempt_login(self):
+        email = self.email_var.get().strip()
+        password = self.pwd_var.get()
+        if not email or not password:
+            messagebox.showwarning("Missing", "Please enter email and password.")
+            return
+        user = authenticate_admin(email, password, self.app.db_manager)
+        if user:
+            self.app.current_user = user
+            # move to dashboard
+            self.app.show_dashboard()
+        else:
+            messagebox.showerror("Login Failed", "Invalid email or password.")
 
     def open_admin_registration(self):
-        reg_win = tk.Toplevel(self.root)
-        reg_win.title("Register New Admin")
-        reg_win.geometry("400x400")
-        reg_win.grab_set()
-        fields = ["Username", "First Name", "Last Name", "Email", "Phone", "Password"]
-        vars = {f: tk.StringVar() for f in fields}
-        for i, f in enumerate(fields):
-            tk.Label(reg_win, text=f+":").grid(row=i, column=0, sticky=tk.W, pady=5, padx=10)
-            show = '*' if f == "Password" else None
-            ent = tk.Entry(reg_win, textvariable=vars[f], show=show) if show else tk.Entry(reg_win, textvariable=vars[f])
-            ent.grid(row=i, column=1, pady=5, padx=10)
+        # Admin registration modal; uses raw SQL for MVP (replace with manager method if available)
+        reg = tk.Toplevel(self)
+        reg.title("Register Admin")
+        reg.geometry("460x380")
+        reg.grab_set()
+
+        frame = tk.Frame(reg, padx=12, pady=12)
+        frame.pack(fill="both", expand=True)
+
+        fields = [("Username", "username"), ("First Name", "first_name"), ("Last Name", "last_name"),
+                  ("Email", "email"), ("Phone", "phone"), ("Password", "password")]
+        vars_map = {}
+        for i, (label, key) in enumerate(fields):
+            tk.Label(frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=6)
+            sv = tk.StringVar()
+            tk.Entry(frame, textvariable=sv, width=36, show="*" if key == "password" else None).grid(row=i, column=1, pady=6)
+            vars_map[key] = sv
+
         def submit():
-            from user_data_manager import DatabaseManager
-            from admin_security_manager import AdminSecurityManager
-            dbm = DatabaseManager()
-            asm = AdminSecurityManager(dbm)
-            username = vars["Username"].get().strip()
-            first_name = vars["First Name"].get().strip()
-            last_name = vars["Last Name"].get().strip()
-            email = vars["Email"].get().strip()
-            phone = vars["Phone"].get().strip()
-            password = vars["Password"].get().strip()
+            username = vars_map["username"].get().strip()
+            first_name = vars_map["first_name"].get().strip()
+            last_name = vars_map["last_name"].get().strip()
+            email = vars_map["email"].get().strip()
+            phone = vars_map["phone"].get().strip()
+            password = vars_map["password"].get().strip()
+
             if not (username and first_name and last_name and email and password):
                 messagebox.showerror("Error", "All fields except phone are required.")
                 return
-            # Hash password
-            password_hash = asm.hash_password(password)
+
+            # Insert into DB (simple approach). In prod use AdminDataManager with hashed passwords.
+            insert_user_q = """
+                INSERT INTO users (first_name, last_name, email, phone, password, role, registration_date, active, created_at, updated_at, created_by, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW(), 1, NOW(), NOW(), NULL, 1)
+            """
+            insert_admin_q = """
+                INSERT INTO admins (user_id, username, password_hash, email, active, email_verified)
+                VALUES (%s, %s, %s, %s, 1, 1)
+            """
             try:
-                with dbm.get_connection() as conn:
+                with self.app.db_manager.get_connection() as conn:
                     with conn.cursor() as cur:
-                        # Insert user
-                        cur.execute("""
-                            INSERT INTO users (first_name, last_name, email, phone, password, role, registration_date, active, created_at, updated_at, created_by, is_active)
-                            VALUES (%s, %s, %s, %s, %s, %s, NOW(), 1, NOW(), NOW(), NULL, 1)
-                        """, (first_name, last_name, email, phone, password_hash, "Admin"))
+                        cur.execute(insert_user_q, (first_name, last_name, email, phone, password, "Admin"))
                         user_id = cur.lastrowid
-                        # Insert admin
-                        cur.execute("""
-                            INSERT INTO admins (user_id, username, password_hash, email, active, email_verified)
-                            VALUES (%s, %s, %s, %s, 1, 1)
-                        """, (user_id, username, password_hash, email))
+                        cur.execute(insert_admin_q, (user_id, username, password, email))
                     conn.commit()
-                messagebox.showinfo("Success", f"Admin '{username}' registered successfully.")
-                reg_win.destroy()
+                messagebox.showinfo("Success", "Admin registered successfully.")
+                reg.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to register admin: {e}")
-        submit_btn = tk.Button(reg_win, text="Register", command=submit)
-        submit_btn.grid(row=len(fields), column=0, columnspan=2, pady=20)
-    def check_login(self):
-        from admin_data_manager import AdminDataManager
-        from datetime import datetime
-        import re
-        email = self.email_var.get().strip()
-        password = self.pwd_var.get()
-        admin_manager = AdminDataManager()
-        try:
-            success, msg = admin_manager.validate_admin_login(email, password, max_attempts=3, lock_minutes=2)
-            if success:
-                self.root.destroy()
-                self.on_success()
-            else:
-                # If account is locked, show countdown
-                lock_match = re.search(r"Account locked until ([\d\- :]+)", str(msg))
-                if lock_match:
-                    unlock_time_str = lock_match.group(1)
-                    try:
-                        unlock_time = datetime.strptime(unlock_time_str, "%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        unlock_time = None
-                    if unlock_time:
-                        self.show_lock_countdown(unlock_time)
-                        return
-                messagebox.showerror("Login Failed", msg or "Incorrect email or password, or inactive account.")
-        except Exception as e:
-            messagebox.showerror("Login Error", f"Error during login: {e}")
 
-    def show_lock_countdown(self, unlock_time):
-        from datetime import datetime
-        countdown_win = tk.Toplevel(self.root)
-        countdown_win.title("Account Locked")
-        countdown_win.geometry("350x150")
-        countdown_win.grab_set()
-        label = tk.Label(countdown_win, text="Account is locked.", font=("Arial", 14))
-        label.pack(pady=10)
-        timer_label = tk.Label(countdown_win, text="", font=("Arial", 12))
-        timer_label.pack(pady=10)
-        def update_timer():
-            now = datetime.now()
-            remaining = (unlock_time - now).total_seconds()
-            if remaining > 0:
-                mins, secs = divmod(int(remaining), 60)
-                timer_label.config(text=f"Try again in {mins:02d}:{secs:02d}")
-                countdown_win.after(1000, update_timer)
-            else:
-                timer_label.config(text="You can now try logging in again.")
-                countdown_win.after(2000, countdown_win.destroy)
-        update_timer()
+        tk.Button(frame, text="Register Admin", command=submit, width=18).grid(row=len(fields), column=0, columnspan=2, pady=14)
 
 
-class AddFacesGUI(tk.Tk):
-    def __init__(self, data_manager=None):
-        super().__init__()
-        self.title("Facial Recognition Attendance System - Admin")
-        self.geometry("900x600")
-        self.configure(bg="#f0f0f0")
-        self.current_frame = None
-        self.search_var = tk.StringVar()
-        self.main_area = None
-        self.nav_frame = None
-        self.data_manager = data_manager or UserDataManager()
-        self.show_main()
+# -------------------------
+# Dashboard Frame (full)
+# -------------------------
+class DashboardFrame(tk.Frame):
+    def __init__(self, parent, app: Application):
+        super().__init__(parent, bg="#f4f6f8")
+        self.app = app
+        self.user_manager = app.user_manager
+        self.db_manager = app.db_manager
+        self.current_content = None
 
-    def show_main(self):
-        if self.current_frame:
-            self.current_frame.destroy()
-            self.current_frame = None
-        if self.main_area:
-            self.main_area.destroy()
-            self.main_area = None
-        if self.nav_frame:
-            self.nav_frame.destroy()
-            self.nav_frame = None
+        # Layout: left nav + main
+        self.nav_frame = tk.Frame(self, bg="#2b3a42", width=220)
+        self.nav_frame.pack(side="left", fill="y")
 
-        self.nav_frame = tk.Frame(self, bg="#2c3e50", width=180)
-        self.nav_frame.pack(side=tk.LEFT, fill=tk.Y)
-        btn_add = tk.Button(self.nav_frame, text="Add User", font=("Arial", 12), command=self.show_add_face, width=15, pady=10)
-        btn_add.pack(pady=(40, 10), padx=10)
-        btn_manage = tk.Button(self.nav_frame, text="Manage Users", font=("Arial", 12), command=self.show_manage_users, width=15, pady=10)
-        btn_manage.pack(pady=10, padx=10)
-        btn_logout = tk.Button(self.nav_frame, text="Log Out", font=("Arial", 12), command=self.logout, width=15, pady=10, fg="white", bg="#d9534f", activebackground="#c9302c")
-        btn_logout.pack(pady=(40, 10), padx=10, side=tk.BOTTOM, anchor="s")
+        self.main_area = tk.Frame(self, bg="#ffffff")
+        self.main_area.pack(side="left", fill="both", expand=True)
 
-        self.main_area = tk.Frame(self, bg="#fff")
-        self.main_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.show_add_face()
+        # Nav content
+        tk.Label(self.nav_frame, text="Admin Panel", bg="#2b3a42", fg="white", font=("Arial", 14)).pack(pady=(18, 8))
+        tk.Button(self.nav_frame, text="Add Student", width=20, command=self.show_add_student).pack(pady=8)
+        tk.Button(self.nav_frame, text="Manage Users", width=20, command=self.show_manage_users).pack(pady=8)
+        tk.Button(self.nav_frame, text="Start Attendance", width=20, command=self.start_attendance_session).pack(pady=8)
+        tk.Button(self.nav_frame, text="Reports (CSV)", width=20, command=self.export_reports).pack(pady=8)
+        # spacer
+        tk.Label(self.nav_frame, text="", bg="#2b3a42").pack(expand=True, fill="y")
+        tk.Button(self.nav_frame, text="Logout", fg="white", bg="#d9534f", width=20, command=self.logout).pack(pady=14)
 
-    def logout(self):
-        self.destroy()
-        LoginWindow(lambda: AddFacesGUI(self.data_manager).mainloop())
+        # Show default view
+        self.show_add_student()
 
-    def show_add_face(self):
-        if self.current_frame:
-            self.current_frame.destroy()
-        self.current_frame = tk.Frame(self.main_area, bg="#fff")
-        self.current_frame.pack(fill=tk.BOTH, expand=True)
-        tk.Label(self.current_frame, text="Register New Student", font=("Arial", 16), bg="#fff").pack(pady=10)
-        form_frame = tk.Frame(self.current_frame, bg="#fff")
-        form_frame.pack(pady=10)
-        # Collect all fields from users and students tables, but hide some from GUI
-        user_fields = [
-            "First Name", "Last Name", "Email", "Phone", "Password", "Role", "Created By"
+    def clear_main(self):
+        for w in self.main_area.winfo_children():
+            w.destroy()
+        self.current_content = None
+
+    # ---------------- Add Student ----------------
+    def show_add_student(self):
+        self.clear_main()
+        frame = tk.Frame(self.main_area, bg="#ffffff", padx=16, pady=16)
+        frame.pack(fill="both", expand=True)
+        self.current_content = frame
+
+        tk.Label(frame, text="Register New Student", font=("Arial", 16), bg="#ffffff").pack(pady=(0, 12))
+
+        form = tk.Frame(frame, bg="#ffffff")
+        form.pack(pady=8, anchor="n")
+
+        fields = [
+            ("First Name", "first_name"),
+            ("Last Name", "last_name"),
+            ("Other Names", "other_names"),
+            ("Email", "email"),
+            ("Phone", "phone"),
+            ("Course", "course"),
+            ("Year", "year_of_study"),
         ]
-        student_fields = [
-            "Student ID", "School", "Cohort", "Course"
-        ]
-        gui_fields = user_fields + student_fields
-        self.form_vars = {f: tk.StringVar() for f in gui_fields}
-        # Hidden fields (auto-filled)
-        hidden_fields = ["Registration Date", "Active", "Created At", "Updated At", "Is Active"]
-        for f in hidden_fields:
-            self.form_vars[f] = tk.StringVar()
+        self.add_vars = {}
+        for i, (label, key) in enumerate(fields):
+            tk.Label(form, text=label + ":", bg="#ffffff").grid(row=i, column=0, sticky="e", pady=6, padx=6)
+            sv = tk.StringVar()
+            tk.Entry(form, textvariable=sv, width=38).grid(row=i, column=1, pady=6, padx=6)
+            self.add_vars[key] = sv
 
-        # Dropdown options for school and course
-        school_options = [
-            "Science", "Engineering", "Business", "Arts", "Education", "Law", "Medicine", "Agriculture", "Computing", "Other"
-        ]
-        course_options = [
-            "Computer Science", "Mechanical Engineering", "Business Administration", "English", "Mathematics", "Physics", "Law", "Medicine", "Agriculture", "Other"
-        ]
-
-        for i, field in enumerate(gui_fields):
-            tk.Label(form_frame, text=field+":", bg="#fff").grid(row=i, column=0, sticky=tk.W, pady=2)
-            if field == "School":
-                school_combo = ttk.Combobox(form_frame, textvariable=self.form_vars[field], values=school_options, state="readonly", width=28)
-                school_combo.grid(row=i, column=1, pady=2)
-            elif field == "Course":
-                course_combo = ttk.Combobox(form_frame, textvariable=self.form_vars[field], values=course_options, state="readonly", width=28)
-                course_combo.grid(row=i, column=1, pady=2)
-            elif field == "Role":
-                role_combo = ttk.Combobox(form_frame, textvariable=self.form_vars[field], values=["Student", "Admin", "Staff"], state="readonly", width=28)
-                role_combo.grid(row=i, column=1, pady=2)
-            else:
-                tk.Entry(form_frame, textvariable=self.form_vars[field], width=30).grid(row=i, column=1, pady=2)
-        tk.Button(self.current_frame, text="Register Student", command=self.register_student).pack(pady=10)
-        self.capture_btn = tk.Button(self.current_frame, text="Capture Face", command=self.open_add_faces, state=tk.DISABLED)
-        self.capture_btn.pack(pady=5)
-        self.capture_note = tk.Label(self.current_frame, text="Please register first, then capture face.", font=("Arial", 10), bg="#fff", fg="gray")
-        self.capture_note.pack(pady=5)
+        btn_frame = tk.Frame(frame, bg="#ffffff")
+        btn_frame.pack(pady=12)
+        tk.Button(btn_frame, text="Register Student", command=self.register_student, width=16).pack(side="left", padx=6)
+        self.capture_btn = tk.Button(btn_frame, text="Capture Face", command=self.launch_face_capture, width=16, state="disabled")
+        self.capture_btn.pack(side="left", padx=6)
+        self.last_registered_student = None
 
     def register_student(self):
-        # Validate required fields
-        if not self.form_vars["First Name"].get().strip() or not self.form_vars["Student ID"].get().strip():
-            messagebox.showerror("Error", "First Name and Student ID are required.")
+        # Validate
+        first = self.add_vars["first_name"].get().strip()
+        last = self.add_vars["last_name"].get().strip()
+        email = self.add_vars["email"].get().strip()
+        if not first or not last or not email:
+            messagebox.showerror("Validation", "First name, last name, and email are required.")
             return
-        from datetime import datetime
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # Auto-fill hidden fields
-        self.form_vars["Registration Date"].set(now_str)
-        self.form_vars["Created At"].set(now_str)
-        self.form_vars["Updated At"].set(now_str)
-        self.form_vars["Active"].set("1")
-        self.form_vars["Is Active"].set("1")
+
         user_dict = {
-            "first_name": self.form_vars["First Name"].get().strip(),
-            "last_name": self.form_vars["Last Name"].get().strip(),
-            "email": self.form_vars["Email"].get().strip(),
-            "phone": self.form_vars["Phone"].get().strip(),
-            "password": self.form_vars["Password"].get().strip(),
-            "role": self.form_vars["Role"].get().strip(),
-            "registration_date": self.form_vars["Registration Date"].get().strip(),
-            "active": int(self.form_vars["Active"].get().strip()),
-            "created_at": self.form_vars["Created At"].get().strip(),
-            "updated_at": self.form_vars["Updated At"].get().strip(),
-            "created_by": self.form_vars["Created By"].get().strip() or None,
-            "is_active": int(self.form_vars["Is Active"].get().strip())
+            "first_name": first,
+            "last_name": last,
+            "other_names": self.add_vars["other_names"].get().strip(),
+            "email": email,
+            "phone": self.add_vars["phone"].get().strip(),
+            # For MVP store plaintext password = email reversed (not secure). In prod, set proper password.
+            "password": (email + "_pass"),  
+            "role": "Student",
+            "registration_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "active": 1,
+            "is_active": 1
         }
+        # For students table, student_id can be auto-assigned or derived. Here we let the DB auto-assign a unique student_id.
         student_dict = {
-            "student_id": self.form_vars["Student ID"].get().strip(),
-            "school": self.form_vars["School"].get().strip(),
-            "cohort": self.form_vars["Cohort"].get().strip(),
-            "course": self.form_vars["Course"].get().strip()
+            "student_id": None,  # if you want external id, set here
+            "school": None,
+            "cohort": None,
+            "course": self.add_vars["course"].get().strip(),
+            "year_of_study": self.add_vars["year_of_study"].get().strip()
         }
+
         try:
-            self.data_manager.add_user(user_dict, student_dict)
-            self.last_registered_user = {**user_dict, **student_dict}
-            messagebox.showinfo("Success", f"Student '{user_dict['first_name']} {user_dict['last_name']}' registered. Now capture face to complete registration.")
-            for var in self.form_vars.values():
-                var.set("")
-            self.capture_btn.config(state=tk.NORMAL)
-            self.capture_note.config(text="Now click 'Capture Face' to register the face.", fg="green")
+            student_id = self.user_manager.add_user(user_dict, student_dict)
+            if not student_id or str(student_id).lower() == 'none':
+                messagebox.showerror("Registration Error", "Registration failed: No student ID returned. Please check the database and try again.")
+                self.last_registered_student = None
+                self.capture_btn.config(state="disabled")
+                return
+            self.last_registered_student = {"student_id": student_id, **user_dict, **student_dict}
+            messagebox.showinfo("Registered", f"Student {first} {last} registered. Student ID: {student_id}")
+            print(f"[DEBUG] Registered student_id: {student_id}")
+            # Clear form
+            for sv in self.add_vars.values():
+                sv.set("")
+            self.capture_btn.config(state="normal")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to register student: {e}")
+            self.last_registered_student = None
+            self.capture_btn.config(state="disabled")
 
-    def open_add_faces(self):
-        import subprocess, sys, os
+    def launch_face_capture(self):
+        """
+        Launch external face-capture script (assumes add_faces.py exists)
+        Usage: add_faces.py <student_id>
+        """
+        if not self.last_registered_student or not self.last_registered_student.get("student_id") or str(self.last_registered_student.get("student_id")).lower() == 'none':
+            messagebox.showerror("Error", "No valid student ID found for face capture. Please register a student first.")
+            print("[DEBUG] launch_face_capture: last_registered_student:", self.last_registered_student)
+            return
+        student_id = str(self.last_registered_student["student_id"])
         try:
             python_exe = sys.executable
-            if hasattr(self, 'last_registered_user'):
-                user = self.last_registered_user
-            else:
-                messagebox.showerror("Error", "No user registered. Please register a student first.")
+            script_path = resource_path("add_faces.py")
+            if not os.path.exists(script_path):
+                messagebox.showerror("Error", f"add_faces.py not found at {script_path}")
                 return
-            student_id = user['student_id']
-            # Student is already in DB, so just proceed to face capture
-            args = [
-                python_exe,
-                os.path.join(os.path.dirname(__file__), 'add_faces.py'),
-                student_id
-            ]
-            # Run add_faces.py and wait for it to finish
-            proc = subprocess.run(args)
+            proc = subprocess.run([python_exe, script_path, student_id])
             if proc.returncode == 0:
-                messagebox.showinfo("Success", "Face captured and student registration complete.")
+                messagebox.showinfo("Success", "Face capture completed.")
             else:
-                messagebox.showerror("Error", "Face capture failed. Registration not saved.")
+                messagebox.showerror("Error", "Face capture failed (see terminal).")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to open face capture window: {e}")
+            messagebox.showerror("Error", f"Failed to run face capture: {e}")
 
+    # ---------------- Manage Users ----------------
     def show_manage_users(self):
-        if self.current_frame:
-            self.current_frame.destroy()
-        self.current_frame = tk.Frame(self.main_area, bg="#fff")
-        self.current_frame.pack(fill=tk.BOTH, expand=True)
-        tk.Label(self.current_frame, text="Registered Users", font=("Arial", 16), bg="#fff").pack(pady=10)
-        search_frame = tk.Frame(self.current_frame, bg="#fff")
-        search_frame.pack(pady=5)
-        tk.Label(search_frame, text="Search:", bg="#fff").pack(side=tk.LEFT)
-        search_entry = tk.Entry(search_frame, textvariable=self.search_var)
-        search_entry.pack(side=tk.LEFT)
-        search_entry.bind('<KeyRelease>', lambda e: self.load_users())
-        self.active_filter_var = tk.StringVar(value="All")
-        tk.Label(search_frame, text="  Status:", bg="#fff").pack(side=tk.LEFT)
-        active_combo = ttk.Combobox(search_frame, textvariable=self.active_filter_var, values=["All", "Active", "Inactive"], state="readonly", width=8)
-        active_combo.pack(side=tk.LEFT, padx=2)
-        active_combo.bind("<<ComboboxSelected>>", lambda e: self.load_users())
-        self.dept_filter_var = tk.StringVar(value="All")
-        tk.Label(search_frame, text="  Department:", bg="#fff").pack(side=tk.LEFT)
-        dept_options = ["All"]
-        users = self.data_manager.get_users()
-        depts = set(row['Department'] for row in users if row.get('Department'))
-        dept_options += sorted(depts)
-        dept_combo = ttk.Combobox(search_frame, textvariable=self.dept_filter_var, values=dept_options, state="readonly", width=12)
-        dept_combo.pack(side=tk.LEFT, padx=2)
-        dept_combo.bind("<<ComboboxSelected>>", lambda e: self.load_users())
-        columns = ("first_name", "last_name", "student_id", "email", "phone", "school", "cohort", "course", "role", "registration_date", "active")
-        self.users_tree = ttk.Treeview(self.current_frame, columns=columns, show="headings", height=15)
-        for col in columns:
-            self.users_tree.heading(col, text=col.replace('_', ' ').title())
-            self.users_tree.column(col, width=100, anchor='center')
-        self.users_tree.pack(pady=10, fill=tk.X)
-        self.load_users()
-        btn_frame = tk.Frame(self.current_frame, bg="#fff")
-        btn_frame.pack(pady=10)
-        del_btn = tk.Button(btn_frame, text="Soft Delete/Restore", command=self.toggle_active, fg="red")
-        del_btn.pack(side=tk.LEFT, padx=5)
-        edit_btn = tk.Button(btn_frame, text="Edit User Info", command=self.edit_user)
-        edit_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_main()
+        frame = tk.Frame(self.main_area, bg="#ffffff", padx=12, pady=12)
+        frame.pack(fill="both", expand=True)
+        self.current_content = frame
 
-    def load_users(self):
-        if hasattr(self, 'users_tree'):
-            for item in self.users_tree.get_children():
-                self.users_tree.delete(item)
-        filter_text = self.search_var.get().strip().lower()
-        active_filter = getattr(self, 'active_filter_var', tk.StringVar(value="All")).get()
-        dept_filter = getattr(self, 'dept_filter_var', tk.StringVar(value="All")).get()
-        users = self.data_manager.get_users()
-        for row in users:
-            student_id = str(row.get('student_id', '')).lower()
-            if filter_text and filter_text not in student_id:
-                continue
-            if active_filter == "Active" and str(row.get('active','1')) != '1':
-                continue
-            if active_filter == "Inactive" and str(row.get('active','1')) == '1':
-                continue
-            if dept_filter != "All" and row.get('school','') != dept_filter:
-                continue
-            values = [row.get(col, '') for col in self.users_tree['columns']]
-            self.users_tree.insert('', tk.END, values=values)
+        tk.Label(frame, text="Registered Students", font=("Arial", 16), bg="#ffffff").pack(pady=(0, 8))
+
+        control_frame = tk.Frame(frame, bg="#ffffff")
+        control_frame.pack(fill="x", pady=(0, 8))
+
+        tk.Label(control_frame, text="Search:", bg="#ffffff").pack(side="left", padx=(6, 4))
+        self.search_var = tk.StringVar()
+        se = tk.Entry(control_frame, textvariable=self.search_var, width=36)
+        se.pack(side="left", padx=4)
+        se.bind("<KeyRelease>", lambda e: self.load_users(limit=20))
+
+        self.active_filter_var = tk.StringVar(value="All")
+        tk.Label(control_frame, text="Status:", bg="#ffffff").pack(side="left", padx=(12, 4))
+        status_combo = ttk.Combobox(control_frame, textvariable=self.active_filter_var, values=["All", "Active", "Inactive"], state="readonly", width=10)
+        status_combo.pack(side="left", padx=4)
+        status_combo.bind("<<ComboboxSelected>>", lambda e: self.load_users(limit=20))
+
+        # Reset filters to show all users by default
+        self.search_var.set("")
+        self.active_filter_var.set("All")
+
+        # Treeview
+        columns = ("student_id", "first_name", "last_name", "email", "phone", "course", "year_of_study", "active")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=18)
+        for col in columns:
+            tree.heading(col, text=col.replace("_", " ").title())
+            tree.column(col, width=120, anchor="center")
+        tree.pack(fill="both", expand=True, pady=(8, 8))
+        self.users_tree = tree
+
+        btn_frame = tk.Frame(frame, bg="#ffffff")
+        btn_frame.pack(pady=6)
+        tk.Button(btn_frame, text="Toggle Active", command=self.toggle_active).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Edit Selected", command=self.edit_user).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Capture Face", command=self.capture_face_for_selected).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Refresh", command=lambda: self.load_users(limit=20)).pack(side="left", padx=6)
+
+        # 🔑 Load first 20 users at startup
+        self.load_users(limit=20)
+
+
+    def capture_face_for_selected(self):
+        sel = self.users_tree.selection()
+        if not sel:
+            messagebox.showwarning("No selection", "Please select a user to capture face.")
+            return
+        item = sel[0]
+        vals = self.users_tree.item(item, "values")
+        student_id = vals[0]
+        if not student_id or str(student_id).lower() == 'none':
+            messagebox.showerror("Error", "Selected user does not have a valid student ID.")
+            return
+        try:
+            python_exe = sys.executable
+            script_path = resource_path("add_faces.py")
+            if not os.path.exists(script_path):
+                messagebox.showerror("Error", f"add_faces.py not found at {script_path}")
+                return
+            proc = subprocess.run([python_exe, script_path, str(student_id)])
+            if proc.returncode == 0:
+                messagebox.showinfo("Success", "Face capture completed.")
+            else:
+                messagebox.showerror("Error", "Face capture failed (see terminal).")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to run face capture: {e}")
+
+        self.load_users()
+
+        def load_users(self, limit=20):
+            # Clear table
+            for row in self.users_tree.get_children():
+                self.users_tree.delete(row)
+
+            search = self.search_var.get().strip()
+            status_filter = self.active_filter_var.get()
+
+            query = """
+                SELECT s.student_id, s.first_name, s.last_name, u.email, u.phone, s.course, s.year_of_study, u.active
+                FROM students s
+                JOIN users u ON s.user_id = u.id
+                WHERE 1=1
+            """
+            params = []
+
+            if search:
+                query += " AND (s.first_name LIKE %s OR s.last_name LIKE %s OR u.email LIKE %s)"
+                params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+
+            if status_filter != "All":
+                query += " AND u.active = %s"
+                params.append(1 if status_filter == "Active" else 0)
+
+            query += " ORDER BY s.student_id DESC"
+            if limit:
+                query += f" LIMIT {limit}"
+
+            try:
+                with self.db_manager.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(query, params)
+                        rows = cur.fetchall()
+
+                # Insert rows into Treeview
+                for row in rows:
+                    self.users_tree.insert("", "end", values=row)
+
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load users: {e}")
 
     def toggle_active(self):
         sel = self.users_tree.selection()
         if not sel:
-            messagebox.showwarning("No selection", "Please select a user to soft delete/restore.")
+            messagebox.showwarning("No selection", "Please select a user row.")
             return
-        user_item = sel[0]
-        user_name = self.users_tree.item(user_item)['values'][0]
-        if not messagebox.askyesno("Confirm", f"Toggle active status for '{user_name}'?"):
-            return
-        self.data_manager.toggle_active(user_name)
-        self.load_users()
-        messagebox.showinfo("User Updated", f"User '{user_name}' active status toggled.")
+        item = sel[0]
+        vals = self.users_tree.item(item, "values")
+        student_id = vals[0]
+        try:
+            self.user_manager.toggle_active(student_id)
+            messagebox.showinfo("Updated", "User active status toggled.")
+            self.load_users()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to toggle active status: {e}")
 
     def edit_user(self):
         sel = self.users_tree.selection()
         if not sel:
             messagebox.showwarning("No selection", "Please select a user to edit.")
             return
-        user_item = sel[0]
-        student_id = str(self.users_tree.item(user_item)['values'][2]).strip()  # student_id is the 3rd column
-        users = self.data_manager.get_users()
-        user = next((row for row in users if str(row.get('student_id', '')).strip() == student_id), None)
-        if not user:
-            messagebox.showerror("Error", f"User with student_id '{student_id}' not found. Please check the database and try again.")
+        item = sel[0]
+        vals = self.users_tree.item(item, "values")
+        student_id = vals[0]
+        # Fetch full user via user_manager
+        try:
+            user = self.user_manager.get_student(student_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to fetch user: {e}")
             return
-        edit_win = tk.Toplevel(self)
-        edit_win.title(f"Edit User: {user['first_name']} {user['last_name']}")
-        edit_win.geometry("420x420")
-        edit_win.grab_set()
-        # --- Field definitions ---
-        user_fields = ["first_name", "last_name", "email", "phone", "role", "password"]
-        student_fields = ["school", "cohort", "course"]
-        readonly_fields = ["student_id", "registration_date", "created_at", "updated_at"]
-        all_fields = [
-            ("Student ID", "student_id", "readonly"),
-            ("First Name", "first_name", "text"),
-            ("Last Name", "last_name", "text"),
-            ("Email", "email", "email"),
-            ("Phone", "phone", "phone"),
-            ("School", "school", "dropdown", [
-                "Science", "Engineering", "Business", "Arts", "Education", "Law", "Medicine", "Agriculture", "Computing", "Other"
-            ]),
-            ("Cohort", "cohort", "text"),
-            ("Course", "course", "dropdown", [
-                "Computer Science", "Mechanical Engineering", "Business Administration", "English", "Mathematics", "Physics", "Law", "Medicine", "Agriculture", "Other"
-            ]),
-            ("Role", "role", "dropdown", ["Student", "Admin", "Staff"]),
-            ("Password", "password", "password"),
-            ("Registration Date", "registration_date", "readonly"),
-            ("Created At", "created_at", "readonly"),
-            ("Updated At", "updated_at", "readonly"),
-        ]
-        # --- Layout ---
-        entries = {}
-        changed_vars = {}
-        row = 0
-        for label, field, ftype, *opts in all_fields:
-            tk.Label(edit_win, text=label+":").grid(row=row, column=0, sticky=tk.W, pady=2, padx=5)
-            val = user.get(field, "")
-            var = tk.StringVar(value=val)
-            changed_vars[field] = var
-            if ftype == "readonly":
-                ent = tk.Entry(edit_win, textvariable=var, state="readonly", width=28)
-            elif ftype == "dropdown":
-                ent = ttk.Combobox(edit_win, textvariable=var, values=opts[0], state="readonly", width=26)
-            elif ftype == "password":
-                pw_frame = tk.Frame(edit_win)
-                ent = tk.Entry(pw_frame, textvariable=var, show="*", width=22)
-                ent.pack(side=tk.LEFT)
-                show_var = tk.BooleanVar(value=False)
-                def toggle_pw(e=None, ent=ent, show_var=show_var):
-                    ent.config(show="" if show_var.get() else "*")
-                show_btn = tk.Checkbutton(pw_frame, text="Show", variable=show_var, command=toggle_pw)
-                show_btn.pack(side=tk.LEFT, padx=2)
-                pw_frame.grid(row=row, column=1, pady=2, sticky=tk.W)
-                entries[field] = ent
-                row += 1
-                continue
-            elif ftype == "email":
-                ent = tk.Entry(edit_win, textvariable=var, width=28)
-            elif ftype == "phone":
-                ent = tk.Entry(edit_win, textvariable=var, width=28)
-            else:
-                ent = tk.Entry(edit_win, textvariable=var, width=28)
-            ent.grid(row=row, column=1, pady=2, sticky=tk.W)
-            entries[field] = ent
-            row += 1
-        # --- Change tracking ---
-        original_values = {field: user.get(field, "") for _, field, _, *rest in all_fields}
-        def has_changes():
-            for _, field, _, *rest in all_fields:
-                if changed_vars[field].get() != str(original_values[field]):
-                    return True
-            return False
-        # --- Validation ---
-        import re
-        def validate_fields():
-            # Required: first_name, last_name, email, phone, school, course
-            errors = []
-            if not changed_vars["first_name"].get().strip():
-                errors.append("First Name is required.")
-            if not changed_vars["last_name"].get().strip():
-                errors.append("Last Name is required.")
-            email_val = changed_vars["email"].get().strip()
-            if not email_val or not re.match(r"[^@]+@[^@]+\.[^@]+", email_val):
-                errors.append("Valid Email is required.")
-            phone_val = changed_vars["phone"].get().strip()
-            if not phone_val or not re.match(r"^[0-9+\- ]{7,}$", phone_val):
-                errors.append("Valid Phone is required.")
-            if not changed_vars["school"].get().strip():
-                errors.append("School is required.")
-            if not changed_vars["course"].get().strip():
-                errors.append("Course is required.")
-            return errors
-        # --- Save logic ---
-        def save_edits():
-            if not has_changes():
-                messagebox.showinfo("No Changes", "No changes to save.")
-                return
-            errors = validate_fields()
-            if errors:
-                messagebox.showerror("Validation Error", "\n".join(errors))
-                return
-            if not messagebox.askyesno("Confirm Save", "Save changes to this user?"):
-                return
-            user_updates = {f: changed_vars[f].get().strip() for f in user_fields if f != "password"}
-            student_updates = {f: changed_vars[f].get().strip() for f in student_fields}
-            # Password reset logic
-            pw_val = changed_vars["password"].get().strip()
-            if pw_val and pw_val != original_values["password"]:
-                user_updates["password"] = pw_val
-            try:
-                self.data_manager.update_user(student_id, user_updates, student_updates)
-                messagebox.showinfo("User Updated", f"User '{changed_vars['first_name'].get()} {changed_vars['last_name'].get()}' info updated.")
-                edit_win.destroy()
-                self.load_users()
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to update user: {e}")
-        # --- Buttons ---
-        btn_frame = tk.Frame(edit_win)
-        btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
-        save_btn = tk.Button(btn_frame, text="Save", command=save_edits)
-        save_btn.pack(side=tk.LEFT, padx=5)
-        cancel_btn = tk.Button(btn_frame, text="Cancel", command=edit_win.destroy)
-        cancel_btn.pack(side=tk.LEFT, padx=5)
-        # --- Advanced: Reset password ---
-        def reset_password():
-            changed_vars["password"].set("")
-            messagebox.showinfo("Reset Password", "Password field cleared. Enter new password and save.")
-        reset_btn = tk.Button(btn_frame, text="Reset Password", command=reset_password)
-        reset_btn.pack(side=tk.LEFT, padx=5)
-        # --- Live change tracking: enable/disable save ---
-        def on_change(*args):
-            save_btn.config(state=tk.NORMAL if has_changes() else tk.DISABLED)
-        for var in changed_vars.values():
-            var.trace_add('write', on_change)
-        save_btn.config(state=tk.DISABLED)
+        if not user:
+            messagebox.showerror("Error", "Selected user not found in DB.")
+            return
 
-# Note: The methods for AddFacesGUI should be copied here as in the original script, but for brevity, they are omitted in this snippet.
+        # Open edit dialog
+        EditUserDialog(self, user, self.user_manager, on_saved=self.load_users)
+
+    # ---------------- Start Attendance ----------------
+    def start_attendance_session(self):
+        """
+        Simple placeholder: in a real system you'd show a dialog to select course/class,
+        create a Classes row, then launch recognition module to mark attendance.
+        For MVP we just show an instructional message and optionally launch recognition script.
+        """
+        if not messagebox.askyesno("Start Attendance", "This will launch the recognition module to mark attendance. Continue?"):
+            return
+        # Launch recognition script (assumes recognition.py or recognition_module exists)
+        try:
+            python_exe = sys.executable
+            rec_script = resource_path("recognition.py")
+            if not os.path.exists(rec_script):
+                messagebox.showerror("Error", f"recognition.py not found at {rec_script}")
+                return
+            # You may want to pass additional args (class_id, lecturer_id, etc.)
+            proc = subprocess.run([python_exe, rec_script])
+            if proc.returncode == 0:
+                messagebox.showinfo("Attendance", "Recognition module finished.")
+            else:
+                messagebox.showerror("Attendance", "Recognition module returned an error. See terminal.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to launch recognition: {e}")
+
+    # ---------------- Reports (CSV) ----------------
+    def export_reports(self):
+        # Minimal placeholder for CSV export
+        messagebox.showinfo("Export", "This will export attendance reports to CSV (not implemented in MVP).")
+
+    def logout(self):
+        if not messagebox.askyesno("Logout", "Are you sure you want to log out?"):
+            return
+        self.app.current_user = None
+        self.app.show_login()
+
+
+# -------------------------
+# Edit User Dialog
+# -------------------------
+class EditUserDialog(tk.Toplevel):
+    def __init__(self, parent: DashboardFrame, user: dict, user_manager: UserDataManager, on_saved=None):
+        super().__init__(parent)
+        self.title("Edit User")
+        self.geometry("480x420")
+        self.grab_set()
+        self.parent = parent
+        self.user = user
+        self.user_manager = user_manager
+        self.on_saved = on_saved
+
+        frame = tk.Frame(self, padx=12, pady=12)
+        frame.pack(fill="both", expand=True)
+
+        fields = [
+            ("First Name", "first_name"),
+            ("Last Name", "last_name"),
+            ("Email", "email"),
+            ("Phone", "phone"),
+            ("Course", "course"),
+            ("Year", "year_of_study"),
+            ("Role", "role")
+        ]
+        self.vars = {}
+        for i, (label, key) in enumerate(fields):
+            tk.Label(frame, text=label + ":", anchor="w").grid(row=i, column=0, sticky="w", pady=6)
+            sv = tk.StringVar(value=str(user.get(key, "")))
+            tk.Entry(frame, textvariable=sv, width=36).grid(row=i, column=1, pady=6)
+            self.vars[key] = sv
+
+        btn_frame = tk.Frame(frame)
+        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=12)
+        tk.Button(btn_frame, text="Save", command=self.save, width=12).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=self.destroy, width=12).pack(side="left", padx=6)
+
+    def save(self):
+        # Basic validation
+        if not self.vars["first_name"].get().strip() or not self.vars["last_name"].get().strip():
+            messagebox.showerror("Validation", "First and last names are required.")
+            return
+
+        user_updates = {
+            "first_name": self.vars["first_name"].get().strip(),
+            "last_name": self.vars["last_name"].get().strip(),
+            "email": self.vars["email"].get().strip(),
+            "phone": self.vars["phone"].get().strip(),
+            "role": self.vars["role"].get().strip()
+        }
+        student_updates = {
+            "course": self.vars["course"].get().strip(),
+            "year_of_study": self.vars["year_of_study"].get().strip()
+        }
+
+        student_id = self.user.get("student_id") or self.user.get("student_id") or ""
+        try:
+            self.user_manager.update_user(student_id, user_updates, student_updates)
+            messagebox.showinfo("Saved", "User updated successfully.")
+            if callable(self.on_saved):
+                self.on_saved()
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to update user: {e}")
+
+
+# -------------------------
+# Run if module executed
+# -------------------------
+if __name__ == "__main__":
+    app = Application()
+    app.mainloop()
