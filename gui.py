@@ -29,6 +29,14 @@ import os
 import re
 from datetime import datetime
 
+import cv2
+import numpy as np
+import pickle
+from deepface import DeepFace
+from mtcnn import MTCNN
+from sklearn.metrics.pairwise import cosine_similarity
+
+
 # Import the DB-backed manager you posted earlier (DatabaseManager, UserDataManager)
 from user_data_manager import DatabaseManager, UserDataManager
 
@@ -138,7 +146,7 @@ class LoginFrame(tk.Frame):
         form = tk.Frame(right, bg="#ffffff", padx=40, pady=40)
         form.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(form, text="Admin / Lecturer Login", font=("Arial", 16), bg="#ffffff").grid(row=0, column=0, columnspan=2, pady=(0, 12))
+        tk.Label(form, text="Admin Panel", font=("Arial", 16), bg="#ffffff").grid(row=0, column=0, columnspan=2, pady=(0, 12))
 
         tk.Label(form, text="Email:", bg="#ffffff").grid(row=1, column=0, sticky="e", pady=6)
         self.email_var = tk.StringVar()
@@ -243,11 +251,20 @@ class DashboardFrame(tk.Frame):
         self.main_area = tk.Frame(self, bg="#ffffff")
         self.main_area.pack(side="left", fill="both", expand=True)
 
+
         # Nav content
         tk.Label(self.nav_frame, text="Admin Panel", bg="#2b3a42", fg="white", font=("Arial", 14)).pack(pady=(18, 8))
         tk.Button(self.nav_frame, text="Add Student", width=20, command=self.show_add_student).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Users", width=20, command=self.show_manage_users).pack(pady=8)
-        tk.Button(self.nav_frame, text="Start Attendance", width=20, command=self.start_attendance_session).pack(pady=8)
+
+        # Admission number input for targeted recognition
+        admission_frame = tk.Frame(self.nav_frame, bg="#2b3a42")
+        admission_frame.pack(pady=(12, 0))
+        tk.Label(admission_frame, text="Admission No.:", bg="#2b3a42", fg="white").pack(side="left", padx=(0, 4))
+        self.admission_var = tk.StringVar()
+        tk.Entry(admission_frame, textvariable=self.admission_var, width=12).pack(side="left")
+
+        tk.Button(self.nav_frame, text="Simulate Attendance", width=20, command=self.start_attendance).pack(pady=8)
         tk.Button(self.nav_frame, text="Reports (CSV)", width=20, command=self.export_reports).pack(pady=8)
         # spacer
         tk.Label(self.nav_frame, text="", bg="#2b3a42").pack(expand=True, fill="y")
@@ -297,6 +314,7 @@ class DashboardFrame(tk.Frame):
         self.last_registered_student = None
 
     def register_student(self):
+        print("[DEBUG] register_student called")
         # Validate
         first = self.add_vars["first_name"].get().strip()
         last = self.add_vars["last_name"].get().strip()
@@ -329,31 +347,38 @@ class DashboardFrame(tk.Frame):
 
         try:
             student_id = self.user_manager.add_user(user_dict, student_dict)
+            print(f"[DEBUG] add_user returned student_id: {student_id}")
             if not student_id or str(student_id).lower() == 'none':
+                print(f"[ERROR] Registration failed: No student ID returned. user_dict={user_dict}, student_dict={student_dict}")
                 messagebox.showerror("Registration Error", "Registration failed: No student ID returned. Please check the database and try again.")
                 self.last_registered_student = None
                 self.capture_btn.config(state="disabled")
                 return
-            self.last_registered_student = {"student_id": student_id, **user_dict, **student_dict}
+            # Fix: ensure student_id is not overwritten by None from student_dict
+            self.last_registered_student = {**user_dict, **student_dict, "student_id": student_id}
+            print(f"[DEBUG] last_registered_student set: {self.last_registered_student}")
             messagebox.showinfo("Registered", f"Student {first} {last} registered. Student ID: {student_id}")
-            print(f"[DEBUG] Registered student_id: {student_id}")
             # Clear form
             for sv in self.add_vars.values():
                 sv.set("")
             self.capture_btn.config(state="normal")
+            # Automatically launch face capture after registration
+            self.launch_face_capture()
         except Exception as e:
+            print(f"[ERROR] Exception in register_student: {e}")
             messagebox.showerror("Error", f"Failed to register student: {e}")
             self.last_registered_student = None
             self.capture_btn.config(state="disabled")
 
     def launch_face_capture(self):
+        print(f"[DEBUG] launch_face_capture called. last_registered_student: {self.last_registered_student}")
         """
         Launch external face-capture script (assumes add_faces.py exists)
         Usage: add_faces.py <student_id>
         """
         if not self.last_registered_student or not self.last_registered_student.get("student_id") or str(self.last_registered_student.get("student_id")).lower() == 'none':
+            print(f"[ERROR] No valid student ID found for face capture. last_registered_student: {self.last_registered_student}")
             messagebox.showerror("Error", "No valid student ID found for face capture. Please register a student first.")
-            print("[DEBUG] launch_face_capture: last_registered_student:", self.last_registered_student)
             return
         student_id = str(self.last_registered_student["student_id"])
         try:
@@ -418,6 +443,7 @@ class DashboardFrame(tk.Frame):
         self.load_users(limit=20)
 
 
+
     def capture_face_for_selected(self):
         sel = self.users_tree.selection()
         if not sel:
@@ -445,46 +471,46 @@ class DashboardFrame(tk.Frame):
 
         self.load_users()
 
-        def load_users(self, limit=20):
-            # Clear table
-            for row in self.users_tree.get_children():
-                self.users_tree.delete(row)
+    def load_users(self, limit=20):
+        # Clear table
+        for row in self.users_tree.get_children():
+            self.users_tree.delete(row)
 
-            search = self.search_var.get().strip()
-            status_filter = self.active_filter_var.get()
+        search = self.search_var.get().strip()
+        status_filter = self.active_filter_var.get()
 
-            query = """
-                SELECT s.student_id, s.first_name, s.last_name, u.email, u.phone, s.course, s.year_of_study, u.active
-                FROM students s
-                JOIN users u ON s.user_id = u.id
-                WHERE 1=1
-            """
-            params = []
+        query = """
+            SELECT s.student_id, s.first_name, s.last_name, u.email, u.phone, s.course, s.year_of_study, u.active
+            FROM students s
+            JOIN users u ON s.user_id = u.id
+            WHERE 1=1
+        """
+        params = []
 
-            if search:
-                query += " AND (s.first_name LIKE %s OR s.last_name LIKE %s OR u.email LIKE %s)"
-                params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+        if search:
+            query += " AND (s.first_name LIKE %s OR s.last_name LIKE %s OR u.email LIKE %s)"
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
-            if status_filter != "All":
-                query += " AND u.active = %s"
-                params.append(1 if status_filter == "Active" else 0)
+        if status_filter != "All":
+            query += " AND u.active = %s"
+            params.append(1 if status_filter == "Active" else 0)
 
-            query += " ORDER BY s.student_id DESC"
-            if limit:
-                query += f" LIMIT {limit}"
+        query += " ORDER BY s.student_id DESC"
+        if limit:
+            query += f" LIMIT {limit}"
 
-            try:
-                with self.db_manager.get_connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(query, params)
-                        rows = cur.fetchall()
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
 
-                # Insert rows into Treeview
-                for row in rows:
-                    self.users_tree.insert("", "end", values=row)
+            # Insert rows into Treeview
+            for row in rows:
+                self.users_tree.insert("", "end", values=row)
 
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load users: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load users: {e}")
 
     def toggle_active(self):
         sel = self.users_tree.selection()
@@ -523,29 +549,28 @@ class DashboardFrame(tk.Frame):
         EditUserDialog(self, user, self.user_manager, on_saved=self.load_users)
 
     # ---------------- Start Attendance ----------------
-    def start_attendance_session(self):
+    def start_attendance(self):
         """
-        Simple placeholder: in a real system you'd show a dialog to select course/class,
-        create a Classes row, then launch recognition module to mark attendance.
-        For MVP we just show an instructional message and optionally launch recognition script.
+        Launch rec_faces.py as a subprocess to handle recognition and attendance, passing admission number if provided.
         """
-        if not messagebox.askyesno("Start Attendance", "This will launch the recognition module to mark attendance. Continue?"):
+        script_path = resource_path("rec_faces.py")
+        if not os.path.exists(script_path):
+            messagebox.showerror("Error", f"rec_faces.py not found at {script_path}")
             return
-        # Launch recognition script (assumes recognition.py or recognition_module exists)
+        python_exe = sys.executable
+        admission_no = self.admission_var.get().strip()
+        cmd = [python_exe, script_path]
+        if admission_no:
+            cmd.append(admission_no)
         try:
-            python_exe = sys.executable
-            rec_script = resource_path("recognition.py")
-            if not os.path.exists(rec_script):
-                messagebox.showerror("Error", f"recognition.py not found at {rec_script}")
-                return
-            # You may want to pass additional args (class_id, lecturer_id, etc.)
-            proc = subprocess.run([python_exe, rec_script])
-            if proc.returncode == 0:
-                messagebox.showinfo("Attendance", "Recognition module finished.")
+            subprocess.Popen(cmd)
+            if admission_no:
+                messagebox.showinfo("Recognition Started", f"Face recognition window launched for Admission No: {admission_no}.")
             else:
-                messagebox.showerror("Attendance", "Recognition module returned an error. See terminal.")
+                messagebox.showinfo("Recognition Started", "Face recognition window launched. Use the new window for attendance.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to launch recognition: {e}")
+
 
     # ---------------- Reports (CSV) ----------------
     def export_reports(self):

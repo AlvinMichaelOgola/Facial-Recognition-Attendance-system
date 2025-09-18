@@ -69,6 +69,27 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+
+    def get_all_face_embeddings(self):
+        """
+        Returns all face embeddings for all students (for recognition/testing).
+        Each row is a dict with keys: 'student_id', 'embedding'.
+        """
+        q = """
+            SELECT fe.student_id, fe.embedding
+            FROM face_embeddings fe
+            JOIN students s ON fe.student_id = s.student_id
+            JOIN users u ON s.user_id = u.id
+            WHERE u.active=1
+            ORDER BY fe.student_id ASC, fe.created_at DESC
+        """
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q)
+                    return cur.fetchall()
+        except Exception as e:
+            raise
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         self.db_manager = db_manager or DatabaseManager()
 

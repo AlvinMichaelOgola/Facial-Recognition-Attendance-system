@@ -21,6 +21,7 @@ MAX_FRAMES = 50
 # Expect only student_id from command-line arguments
 if len(sys.argv) >= 2:
     student_id = sys.argv[1]
+    print(f"[DEBUG] add_faces.py received student_id: {student_id}")
 else:
     raise RuntimeError("student_id must be provided by the GUI as a command-line argument.")
 
@@ -77,7 +78,16 @@ while count < MAX_FRAMES:
                 face_bgr = cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR)
                 embedding = DeepFace.represent(face_bgr, model_name='Facenet', enforce_detection=False)[0]["embedding"]
                 # Save embedding to database
-                data_manager.add_face_embedding(student_id, embedding)
+                try:
+                    data_manager.add_face_embedding(student_id, embedding)
+                    print(f"[SUCCESS] Saved embedding for student_id {student_id} (frame {count+1})")
+                except Exception as db_exc:
+                    error_msg = f"[DB ERROR] Failed to save embedding for student_id {student_id}: {db_exc}"
+                    print(error_msg)
+                    logging.error(error_msg)
+                    cv2.putText(frame, "DB Error", (x, y-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    continue
                 count += 1
                 # Always show green border for added face
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
