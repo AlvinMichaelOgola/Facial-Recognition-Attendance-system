@@ -6,3 +6,51 @@ psutil
 tf-keras
 numpy
 pillow
+
+
+py -3.10 -m venv venv
+
+.\\venv\\Scripts\\Activate
+
+cd Facial-Recognition-Attendance-system
+
+python add_faces_gui.py
+
+#Database password = Xfkk3VAKenh7BIpG
+
+
+
+Strathmore University Courses
+Bachelor of Science in Tourism Management (BTM)
+
+Bachelor of Science in Hospitality Management (BHM)
+
+Bachelor of Business Science: Financial Engineering (BBSFENG)
+
+Bachelor of Business Science: Financial Economics (BBSFE)
+
+Bachelor of Business Science: Actuarial Science (BBSACT)
+
+Bachelor Of Science In Informatics And Computer Science (BICS)
+
+Bachelor Of Business Information Technology (BBIT)
+
+BSc. Computer Networks and Cyber Security (BCNS)
+
+Bachelor of Laws (LLB)
+
+Bachelor of Arts in Communication (BAC)
+
+Bachelor of Arts in International Studies
+
+Bachelor of Arts in Development Studies and Philosophy (BDP)
+
+Bachelor of Science in Supply Chain and Operations Management (BSCM)
+
+Bachelor of Financial Services (BFS)
+
+Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)
+
+BSc in Statistics and Data Science (BScSDS)
+
+Bachelor of Commerce (BCOM)

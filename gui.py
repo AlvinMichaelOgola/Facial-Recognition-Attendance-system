@@ -100,12 +100,19 @@ class Application(tk.Tk):
         # Currently logged-in admin info (dict)
         self.current_user = None
 
-        # Frame holder
+        # Only show splash at startup, no other frames packed yet
+        self.splash_frame = tk.Frame(self, bg="#2c3e50")
+        self.splash_frame.pack(fill="both", expand=True)
+        splash_label = tk.Label(self.splash_frame, text="Getting things ready for you, please wait...", font=("Arial", 18), fg="white", bg="#2c3e50")
+        splash_label.pack(expand=True, fill="both")
+        self.after(1200, self._remove_splash_and_show_login)
+
+    def _remove_splash_and_show_login(self):
+        self.splash_frame.destroy()
         self.container = tk.Frame(self)
         self.container.pack(fill="both", expand=True)
-
-        # Start with Login
         self.show_login()
+
 
     def show_login(self):
         # Destroy any existing frames in container
@@ -426,9 +433,19 @@ class DashboardFrame(tk.Frame):
         # Treeview
         columns = ("student_id", "first_name", "last_name", "email", "phone", "course", "year_of_study", "active")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=18)
+        col_widths = {
+            "student_id": 90,
+            "first_name": 110,
+            "last_name": 110,
+            "email": 180,
+            "phone": 120,
+            "course": 160,
+            "year_of_study": 100,
+            "active": 80
+        }
         for col in columns:
             tree.heading(col, text=col.replace("_", " ").title())
-            tree.column(col, width=120, anchor="center")
+            tree.column(col, width=col_widths.get(col, 120), anchor="center")
         tree.pack(fill="both", expand=True, pady=(8, 8))
         self.users_tree = tree
 
@@ -480,7 +497,7 @@ class DashboardFrame(tk.Frame):
         status_filter = self.active_filter_var.get()
 
         query = """
-            SELECT s.student_id, s.first_name, s.last_name, u.email, u.phone, s.course, s.year_of_study, u.active
+            SELECT s.student_id, u.first_name, u.last_name, u.email, u.phone, s.course, s.year_of_study, u.active
             FROM students s
             JOIN users u ON s.user_id = u.id
             WHERE 1=1
@@ -505,9 +522,20 @@ class DashboardFrame(tk.Frame):
                     cur.execute(query, params)
                     rows = cur.fetchall()
 
-            # Insert rows into Treeview
+            print(f"[DEBUG] Rows fetched from DB: {rows}")
+            # Insert rows into Treeview with correct formatting and value order
             for row in rows:
-                self.users_tree.insert("", "end", values=row)
+                formatted = [
+                    row["student_id"],
+                    row["first_name"],
+                    row["last_name"],
+                    row["email"],
+                    row["phone"],
+                    row["course"],
+                    row["year_of_study"] if row["year_of_study"] is not None else "",
+                    "Active" if row["active"] == 1 else "Inactive"
+                ]
+                self.users_tree.insert("", "end", values=formatted)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load users: {e}")
@@ -553,9 +581,9 @@ class DashboardFrame(tk.Frame):
         """
         Launch rec_faces.py as a subprocess to handle recognition and attendance, passing admission number if provided.
         """
-        script_path = resource_path("rec_faces.py")
+        script_path = resource_path("rec_faces_test.py")
         if not os.path.exists(script_path):
-            messagebox.showerror("Error", f"rec_faces.py not found at {script_path}")
+            messagebox.showerror("Error", f"rec_faces_test.py not found at {script_path}")
             return
         python_exe = sys.executable
         admission_no = self.admission_var.get().strip()
@@ -565,17 +593,17 @@ class DashboardFrame(tk.Frame):
         try:
             subprocess.Popen(cmd)
             if admission_no:
-                messagebox.showinfo("Recognition Started", f"Face recognition window launched for Admission No: {admission_no}.")
+                messagebox.showinfo("Test Mode Started", f"Face recognition test window launched for Admission No: {admission_no}.")
             else:
-                messagebox.showinfo("Recognition Started", "Face recognition window launched. Use the new window for attendance.")
+                messagebox.showinfo("Test Mode Started", "Face recognition test window launched. No attendance will be marked.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to launch recognition: {e}")
+            messagebox.showerror("Error", f"Failed to launch recognition test: {e}")
 
 
     # ---------------- Reports (CSV) ----------------
     def export_reports(self):
         # Minimal placeholder for CSV export
-        messagebox.showinfo("Export", "This will export attendance reports to CSV (not implemented in MVP).")
+        messagebox.showinfo("Export", "This will export attendance reports to CSV (To be released).")
 
     def logout(self):
         if not messagebox.askyesno("Logout", "Are you sure you want to log out?"):
