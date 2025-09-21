@@ -87,32 +87,48 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+    def get_cohorts_two(self):
+        """Return all cohorts from cohorts_two table."""
+        q = "SELECT * FROM cohorts_two"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor(pymysql.cursors.DictCursor) as cur:
+                cur.execute(q)
+                return cur.fetchall()
+
+    def get_lecturers_table_two(self):
+        """Return all lecturers from lecturers_table_two table."""
+        q = "SELECT * FROM lecturers_table_two"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor(pymysql.cursors.DictCursor) as cur:
+                cur.execute(q)
+                return cur.fetchall()
     def create_class(self, class_data: Dict[str, Any]) -> int:
         """
-        Create a new class in the classes table.
+        Create a new class in the classes_two table.
         class_data should contain: cohort_id, lecturer_id, class_name, code, description, schedule
         Returns the new class id.
         """
         q = """
-            INSERT INTO classes (cohort_id, lecturer_id, class_name, code, description, schedule)
+            INSERT INTO classes_two (cohort_id, lecturer_id, class_name, code, description, schedule)
             VALUES (%s, %s, %s, %s, %s, %s)
         """
-        try:
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(q, (
-                        class_data.get("cohort_id"),
-                        class_data.get("lecturer_id"),
-                        class_data.get("class_name"),
-                        class_data.get("code"),
-                        class_data.get("description"),
-                        class_data.get("schedule"),
-                    ))
-                    class_id = cur.lastrowid
+        params = (
+            int(class_data["cohort_id"]),
+            str(class_data["lecturer_id"]),
+            class_data["class_name"],
+            class_data["code"],
+            class_data.get("description", ""),
+            class_data.get("schedule", "")
+        )
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, params)
                 conn.commit()
-            return class_id
-        except Exception as e:
-            raise
+                return cur.lastrowid
+            with self.conn.cursor() as cur:
+                cur.execute(q, params)
+                self.conn.commit()
+                return cur.lastrowid
 
     def authenticate_lecturer(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """
@@ -424,9 +440,10 @@ class UserDataManager:
     def _resolve_lecturer_pk(self, lecturer_identifier: Any) -> Optional[int]:
         """
         Accepts either:
-        - lecturers.id (int/string numeric)
-        - users.id (int/string numeric) -> looks up lecturers row with user_id = users.id
-        Returns lecturers.id or None if not found.
+        - lecturers_table_two.id (int/string numeric)
+        - users.id (int/string numeric) -> looks up lecturers_table_two row with user_id = users.id
+        - lecturer_id (string like 'L001')
+        Returns lecturers_table_two.id or None if not found.
         """
         if lecturer_identifier is None:
             return None
@@ -437,21 +454,21 @@ class UserDataManager:
             try:
                 with self.db_manager.get_connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SELECT id FROM lecturers WHERE lecturer_id=%s LIMIT 1", (str(lecturer_identifier),))
+                        cur.execute("SELECT id FROM lecturers_table_two WHERE lecturer_id=%s LIMIT 1", (str(lecturer_identifier),))
                         r = cur.fetchone()
                         return r["id"] if r else None
             except Exception:
                 return None
-        # if numeric: first try treating as lecturers.id
+        # if numeric: first try treating as lecturers_table_two.id
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT id FROM lecturers WHERE id=%s LIMIT 1", (lid,))
+                    cur.execute("SELECT id FROM lecturers_table_two WHERE id=%s LIMIT 1", (lid,))
                     r = cur.fetchone()
                     if r:
                         return r["id"]
-                    # fall back: treat as users.id -> find lecturers row with user_id = lid
-                    cur.execute("SELECT id FROM lecturers WHERE user_id=%s LIMIT 1", (lid,))
+                    # fall back: treat as users.id -> find lecturers_table_two row with user_id = lid
+                    cur.execute("SELECT id FROM lecturers_table_two WHERE user_id=%s LIMIT 1", (lid,))
                     r2 = cur.fetchone()
                     if r2:
                         return r2["id"]
@@ -708,26 +725,14 @@ class UserDataManager:
         Inserts a mapping between lecturer (lecturers.id or users.id) and class.
         """
         try:
-            lecturer_pk = self._resolve_lecturer_pk(lecturer_identifier)
-            if lecturer_pk is None:
-                # if lecturer_identifier is users.id numeric, try to resolve
-                try:
-                    uid = int(lecturer_identifier)
-                    with self.db_manager.get_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT id FROM lecturers WHERE user_id=%s LIMIT 1", (uid,))
-                            rr = cur.fetchone()
-                            if rr:
-                                lecturer_pk = rr["id"]
-                            else:
-                                raise ValueError("Lecturer not found for provided identifier.")
-                except Exception:
-                    raise ValueError("Invalid lecturer identifier provided.")
-
-            q = "INSERT INTO lecturer_classes (lecturer_id, class_id) VALUES (%s, %s)"
+            # Always use the string lecturer_id (e.g., 'L001') for the mapping table
+            lecturer_id_str = str(lecturer_identifier)
+            print(f"[DEBUG] Inserting into lecturer_classes: lecturer_id={lecturer_id_str}, class_id={class_id}")
+            q = "INSERT INTO lecturer_classes (lecturer_id, class_id, assigned_by, assigned_at) VALUES (%s, %s, %s, NOW())"
+            assigned_by = 'system'  # Replace with admin user ID if available
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(q, (lecturer_pk, class_id))
+                    cur.execute(q, (lecturer_id_str, class_id, assigned_by))
                 conn.commit()
         except Exception:
             raise
@@ -758,18 +763,16 @@ class UserDataManager:
 
     def get_lecturer_classes(self, lecturer_identifier: Any) -> List[Dict[str, Any]]:
         """
-        Returns all classes assigned to a lecturer.
-        Accepts lecturer_identifier which can be lecturers.id, users.id, or lecturer_id string 'L001'.
+        Returns all classes assigned to a lecturer (single lecturer per class model).
+        Accepts lecturer_identifier which should be lecturer_id string like 'L001'.
         """
         try:
-            # Use lecturer_id (string, e.g. 'L001') directly
             lecturer_id = str(lecturer_identifier)
             q = """
-                SELECT c.id as id, c.cohort_id, c.class_name as name, c.code
-                FROM lecturer_classes lc
-                JOIN classes c ON lc.class_id = c.id
-                WHERE lc.lecturer_id=%s
-                ORDER BY c.class_name ASC
+                SELECT id, cohort_id, class_name, code
+                FROM classes_two
+                WHERE lecturer_id=%s
+                ORDER BY class_name ASC
             """
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -782,33 +785,17 @@ class UserDataManager:
     def create_attendance_session(self, class_id: int, lecturer_identifier: Any, name: Optional[str] = None) -> int:
         """
         Creates an attendance session row and returns session_id.
-        lecturer_identifier may be lecturers.id, users.id, or 'L001' style id.
+        lecturer_identifier should be lecturer_id string like 'L001'.
         """
         try:
-            # resolve lecturer_pk to store in attendance_sessions. This table stores lecturer_id referencing lecturers.id.
-            lecturer_pk = self._resolve_lecturer_pk(lecturer_identifier)
-            if lecturer_pk is None:
-                # try treating lecturer_identifier as numeric users.id and find lecturers.id
-                try:
-                    uid = int(lecturer_identifier)
-                    with self.db_manager.get_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT id FROM lecturers WHERE user_id=%s LIMIT 1", (uid,))
-                            r = cur.fetchone()
-                            if r:
-                                lecturer_pk = r["id"]
-                except Exception:
-                    pass
-            if lecturer_pk is None:
-                raise ValueError("Could not resolve lecturer for attendance session creation.")
-
+            lecturer_id = str(lecturer_identifier)
             q = """
                 INSERT INTO attendance_sessions (class_id, lecturer_id, name, started_at, status)
                 VALUES (%s, %s, %s, NOW(), 'active')
             """
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(q, (class_id, lecturer_pk, name or None))
+                    cur.execute(q, (class_id, lecturer_id, name or None))
                     session_id = cur.lastrowid
                 conn.commit()
             return session_id

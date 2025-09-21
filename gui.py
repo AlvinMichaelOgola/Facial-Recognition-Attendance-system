@@ -112,6 +112,7 @@ class Application(tk.Tk):
             widget.destroy()
         dash = DashboardFrame(self.container, app=self)
         dash.pack(fill="both", expand=True)
+        dash.show_add_student()
 
 
 # -------------------------
@@ -241,21 +242,21 @@ class DashboardFrame(tk.Frame):
         self.main_area = tk.Frame(self, bg="#ffffff")
         self.main_area.pack(side="left", fill="both", expand=True)
 
-        # Nav content
+        # Nav content (now inside __init__)
         tk.Label(self.nav_frame, text="Admin Panel", bg="#2b3a42", fg="white", font=("Arial", 14)).pack(pady=(18, 8))
         tk.Button(self.nav_frame, text="Add Student", width=20, command=self.show_add_student).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Users", width=20, command=self.show_manage_users).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Lecturers", width=20, command=self.show_manage_lecturers).pack(pady=8)
-
+        tk.Button(self.nav_frame, text="Manage Cohorts", width=20, command=self.show_manage_cohorts).pack(pady=8)
+        tk.Button(self.nav_frame, text="Attendance Sessions", width=20, command=lambda: messagebox.showinfo("Info", "Feature coming soon!")).pack(pady=8)
+        tk.Button(self.nav_frame, text="Attendance Reports", width=20, command=self.export_reports).pack(pady=8)
         # Admission number input for targeted recognition
         admission_frame = tk.Frame(self.nav_frame, bg="#2b3a42")
         admission_frame.pack(pady=(12, 0))
         tk.Label(admission_frame, text="Admission No.:", bg="#2b3a42", fg="white").pack(side="left", padx=(0, 4))
         self.admission_var = tk.StringVar()
         tk.Entry(admission_frame, textvariable=self.admission_var, width=12).pack(side="left")
-
         tk.Button(self.nav_frame, text="Simulate Attendance", width=20, command=self.start_attendance).pack(pady=8)
-        tk.Button(self.nav_frame, text="Reports (CSV)", width=20, command=self.export_reports).pack(pady=8)
         # spacer
         tk.Label(self.nav_frame, text="", bg="#2b3a42").pack(expand=True, fill="y")
         tk.Button(self.nav_frame, text="Logout", fg="white", bg="#d9534f", width=20, command=self.logout).pack(pady=14)
@@ -617,30 +618,97 @@ class DashboardFrame(tk.Frame):
         dlg.transient(self)
         dlg.grab_set()
 
+        # Fetch real cohorts from cohorts_two for dropdown
+        try:
+            cohorts = safe_call(self.user_manager, "get_cohorts_two")
+        except Exception:
+            cohorts = []
+        cohort_choices = [(str(c.get("id")), f"{c.get('id')} (Course: {c.get('course_id')}, Year: {c.get('year')}, Sem: {c.get('semester')})") for c in cohorts]
+
         fields = [
-            ("Cohort ID", "cohort_id"),
-            ("Lecturer ID", "lecturer_id"),
+            ("Cohort", "cohort_id"),
+            ("Lecturer", "lecturer_id"),
             ("Class Name", "class_name"),
             ("Code", "code"),
             ("Description", "description"),
             ("Schedule", "schedule"),
         ]
+        # Fetch real lecturers from lecturers_table_two for dropdown
+        try:
+            lecturers = safe_call(self.user_manager, "get_lecturers_table_two")
+        except Exception:
+            lecturers = []
+        # Use integer lecturer_id as value, display name or email for clarity
+        lecturer_choices = []
+        for l in lecturers:
+            lid = l.get("lecturer_id")
+            # Try to show full name or fallback to email/username
+            name = l.get("first_name", "") + " " + l.get("last_name", "")
+            if not name.strip():
+                name = l.get("name", "")
+            if not name.strip():
+                name = l.get("email", "")
+            lecturer_choices.append((lid, f"{lid} - {name.strip()}"))
+
         vars = {}
         form = tk.Frame(dlg)
         form.pack(pady=16, padx=16)
         for i, (label, key) in enumerate(fields):
             tk.Label(form, text=label+":").grid(row=i, column=0, sticky="e", pady=6, padx=6)
-            sv = tk.StringVar()
-            tk.Entry(form, textvariable=sv, width=28).grid(row=i, column=1, pady=6, padx=6)
-            vars[key] = sv
+            if key == "cohort_id":
+                sv = tk.StringVar()
+                cb = ttk.Combobox(form, textvariable=sv, width=26, state="readonly")
+                cb['values'] = [desc for cid, desc in cohort_choices]
+                cb.grid(row=i, column=1, pady=6, padx=6)
+                vars[key] = (sv, cohort_choices)
+            elif key == "lecturer_id":
+                sv = tk.StringVar()
+                cb = ttk.Combobox(form, textvariable=sv, width=26, state="readonly")
+                cb['values'] = [desc for lid, desc in lecturer_choices]
+                cb.grid(row=i, column=1, pady=6, padx=6)
+                vars[key] = (sv, lecturer_choices)
+            else:
+                sv = tk.StringVar()
+                tk.Entry(form, textvariable=sv, width=28).grid(row=i, column=1, pady=6, padx=6)
+                vars[key] = sv
 
         def on_save():
-            class_data = {k: v.get().strip() for k, v in vars.items()}
+            class_data = {}
+            for k, v in vars.items():
+                if k == "cohort_id":
+                    sv, choices = v
+                    selected = sv.get()
+                    cohort_id = None
+                    for cid, desc in choices:
+                        if desc == selected:
+                            cohort_id = cid
+                            break
+                    class_data[k] = cohort_id
+                elif k == "lecturer_id":
+                    sv, choices = v
+                    selected = sv.get()
+                    lecturer_id = None
+                    for lid, desc in choices:
+                        if desc == selected:
+                            lecturer_id = str(lid)  # Always use string
+                            break
+                    print(f"[DEBUG] Selected lecturer_id for assignment: {lecturer_id}")
+                    class_data[k] = lecturer_id
+                else:
+                    class_data[k] = v.get().strip()
             if not class_data["class_name"] or not class_data["code"]:
                 messagebox.showerror("Validation", "Class Name and Code are required.")
                 return
+            if not class_data["cohort_id"]:
+                messagebox.showerror("Validation", "Cohort selection is required.")
+                return
+            if not class_data["lecturer_id"]:
+                messagebox.showerror("Validation", "Lecturer selection is required.")
+                return
             try:
                 class_id = safe_call(self.user_manager, "create_class", class_data)
+                # Assign lecturer to class in mapping table
+                safe_call(self.user_manager, "assign_lecturer_to_class", class_data["lecturer_id"], class_id)
                 messagebox.showinfo("Created", f"Class created with ID: {class_id}")
                 dlg.destroy()
                 # Optionally refresh class assignment lists if needed
@@ -875,6 +943,156 @@ class DashboardFrame(tk.Frame):
             messagebox.showerror("Missing DB Method", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to reset password: {e}")
+
+    # ---------------- Manage Cohorts ----------------
+    def show_manage_cohorts(self):
+        self.clear_main()
+        frame = tk.Frame(self.main_area, bg="#ffffff", padx=12, pady=12)
+        frame.pack(fill="both", expand=True)
+        self.current_content = frame
+
+        tk.Label(frame, text="Manage Cohorts", font=("Arial", 16), bg="#ffffff").pack(pady=(0, 8))
+
+        control_frame = tk.Frame(frame, bg="#ffffff")
+        control_frame.pack(fill="x", pady=(0, 8))
+
+        tk.Button(control_frame, text="Add Cohort", command=self.add_cohort_dialog).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Edit Selected", command=self.edit_cohort_dialog).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Refresh", command=self.load_cohorts).pack(side="left", padx=6)
+
+        columns = ("cohort_id", "course_id", "year", "semester")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
+        col_widths = {
+            "cohort_id": 90,
+            "course_id": 120,
+            "year": 80,
+            "semester": 100
+        }
+        for col in columns:
+            tree.heading(col, text=col.replace("_", " ").title())
+            tree.column(col, width=col_widths.get(col, 100), anchor="center")
+        tree.pack(fill="both", expand=True, pady=(8, 8))
+        self.cohorts_tree = tree
+
+        self.load_cohorts()
+
+    def load_cohorts(self):
+        try:
+            for row in self.cohorts_tree.get_children():
+                self.cohorts_tree.delete(row)
+        except Exception:
+            pass
+
+        try:
+            cohorts = safe_call(self.user_manager, "get_cohorts")
+        except AttributeError as e:
+            messagebox.showerror("Missing DB Method", str(e))
+            return
+        except Exception as e:
+            messagebox.showerror("DB Error", f"Failed to fetch cohorts: {e}")
+            return
+
+        for c in cohorts:
+            cohort_id = c.get("cohort_id") or c.get("id")
+            course_id = c.get("course_id")
+            year = c.get("year")
+            semester = c.get("semester")
+            self.cohorts_tree.insert("", "end", values=(cohort_id, course_id, year, semester))
+
+    def add_cohort_dialog(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Add Cohort")
+        dlg.geometry("340x260")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        form = tk.Frame(dlg, padx=12, pady=12)
+        form.pack(fill="both", expand=True)
+
+        fields = [
+            ("Course ID", "course_id"),
+            ("Year", "year"),
+            ("Semester", "semester")
+        ]
+        vars = {}
+        for i, (label, key) in enumerate(fields):
+            tk.Label(form, text=label+":").grid(row=i, column=0, sticky="e", pady=6, padx=6)
+            sv = tk.StringVar()
+            tk.Entry(form, textvariable=sv, width=24).grid(row=i, column=1, pady=6, padx=6)
+            vars[key] = sv
+
+        def on_save():
+            cohort_data = {k: v.get().strip() for k, v in vars.items()}
+            if not cohort_data["course_id"] or not cohort_data["year"] or not cohort_data["semester"]:
+                messagebox.showerror("Validation", "All fields are required.")
+                return
+            try:
+                new_id = safe_call(self.user_manager, "create_cohort", cohort_data)
+                messagebox.showinfo("Created", f"Cohort created (id={new_id}).")
+                dlg.destroy()
+                self.load_cohorts()
+            except AttributeError as e:
+                messagebox.showerror("Missing DB Method", str(e))
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to create cohort: {e}")
+
+        btns = tk.Frame(form)
+        btns.grid(row=len(fields), column=0, columnspan=2, pady=12)
+        tk.Button(btns, text="Save", command=on_save, width=12).pack(side="left", padx=6)
+        tk.Button(btns, text="Cancel", command=dlg.destroy, width=12).pack(side="left", padx=6)
+
+    def edit_cohort_dialog(self):
+        sel = self.cohorts_tree.selection()
+        if not sel:
+            messagebox.showwarning("No selection", "Please select a cohort to edit.")
+            return
+        item = sel[0]
+        vals = self.cohorts_tree.item(item, "values")
+        cohort_id = vals[0]
+        course_id = vals[1]
+        year = vals[2]
+        semester = vals[3]
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Edit Cohort")
+        dlg.geometry("340x260")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        form = tk.Frame(dlg, padx=12, pady=12)
+        form.pack(fill="both", expand=True)
+
+        fields = [
+            ("Course ID", "course_id", course_id),
+            ("Year", "year", year),
+            ("Semester", "semester", semester)
+        ]
+        vars = {}
+        for i, (label, key, initial) in enumerate(fields):
+            tk.Label(form, text=label+":").grid(row=i, column=0, sticky="e", pady=6, padx=6)
+            sv = tk.StringVar(value=initial)
+            tk.Entry(form, textvariable=sv, width=24).grid(row=i, column=1, pady=6, padx=6)
+            vars[key] = sv
+
+        def on_save():
+            cohort_data = {k: v.get().strip() for k, v in vars.items()}
+            if not cohort_data["course_id"] or not cohort_data["year"] or not cohort_data["semester"]:
+                messagebox.showerror("Validation", "All fields are required.")
+                return
+            try:
+                safe_call(self.user_manager, "update_cohort", cohort_id, cohort_data)
+                messagebox.showinfo("Saved", "Cohort updated.")
+                dlg.destroy()
+                self.load_cohorts()
+            except AttributeError as e:
+                messagebox.showerror("Missing DB Method", str(e))
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to update cohort: {e}")
+
+        btns = tk.Frame(form)
+        btns.grid(row=len(fields), column=0, columnspan=2, pady=12)
+        tk.Button(btns, text="Save", command=on_save, width=12).pack(side="left", padx=6)
+        tk.Button(btns, text="Cancel", command=dlg.destroy, width=12).pack(side="left", padx=6)
 
     # ---------------- Start Attendance ----------------
     def start_attendance(self):

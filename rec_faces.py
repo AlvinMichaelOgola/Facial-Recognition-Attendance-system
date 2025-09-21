@@ -7,7 +7,9 @@ import datetime
 import threading
 import logging
 from embedding_loader import EmbeddingLoader
+from user_data_manager import DatabaseManager
 from face_recognizer import FaceRecognizer
+
 
 MODEL_NAME = 'Facenet'
 SIMILARITY_THRESHOLD = 0.7
@@ -18,35 +20,24 @@ user_info_path = os.path.join(DATA_DIR, "user_info.csv")
 attendance_file = os.path.join('data', 'attendance.csv')
 os.makedirs('data', exist_ok=True)
 
+# Set TEST_MODE to False for normal operation
+TEST_MODE = False
+
 # ---------------------------
 # Parse CLI arguments
 # ---------------------------
-admission_no = None
-TEST_MODE = False
-
-if len(sys.argv) > 1:
-    admission_no = sys.argv[1].strip()
-
-if len(sys.argv) > 2 and sys.argv[2] == "--test":
-    TEST_MODE = True
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 # ---------------------------
-# Load embeddings
+# Load embeddings (all students)
 # ---------------------------
-loader = EmbeddingLoader(embeddings_path, user_info_path)
-active_names = loader.load_active_names()
 
-if admission_no:
-    print(f"[INFO] Filtering for admission number: {admission_no}")
-    active_names = {admission_no} if admission_no in active_names or not active_names else active_names & {admission_no}
-    # If not in user_info, still try to load from embeddings
-    all_embeddings, all_labels = loader.load_embeddings({admission_no})
-else:
-    all_embeddings, all_labels = loader.load_embeddings(active_names)
-
-print(f"[DEBUG] Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} active people: {set(all_labels)}")
+# Load embeddings from the database for active students
+db_manager = DatabaseManager()
+loader = EmbeddingLoader(db_manager=db_manager)
+all_embeddings, all_labels = loader.load_embeddings(from_db=True)
+print(f"[DEBUG] Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} active students: {set(all_labels)}")
 
 # ---------------------------
 # Face recognizer
@@ -58,6 +49,7 @@ recognizer = FaceRecognizer(
     similarity_threshold=SIMILARITY_THRESHOLD,
     stable_frames=STABLE_FRAMES
 )
+import argparse
 
 # ---------------------------
 # Attendance state
@@ -79,6 +71,12 @@ def flush_attendance():
 # Recognition thread
 # ---------------------------
 recognition_thread = threading.Thread(target=recognizer.recognize_faces)
+
+# Parse session_id from command-line arguments
+parser = argparse.ArgumentParser(description="Face Recognition Attendance")
+parser.add_argument("session_id", type=int, help="Attendance session ID", nargs='?')
+args = parser.parse_args()
+SESSION_ID = args.session_id
 recognition_thread.start()
 
 cap = cv2.VideoCapture(0)

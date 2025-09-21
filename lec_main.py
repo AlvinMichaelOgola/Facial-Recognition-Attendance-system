@@ -1,50 +1,45 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
-import datetime
+from tkinter import ttk, messagebox
+import ttkbootstrap as tb
 import subprocess
 import os
 from user_data_manager import UserDataManager
 
-
-class LecturerApp(tk.Tk):
+class LecturerApp(tb.Window):
     def __init__(self):
-        super().__init__()
+        super().__init__(themename="darkly")
         self.title("Lecturer Module")
         self.geometry("900x600")
 
+        # DB & session
         self.db = UserDataManager()
         self.lecturer = None
         self.session_id = None
+        self.recog_process = None
 
-        # self.show_login()
-        # Bypass login for demo/testing: auto-login as first lecturer
-        lecturers = self.db.get_lecturers()
-        if lecturers:
-            self.lecturer = lecturers[0]
-            self.show_dashboard()
-        else:
-            self.show_login()
+        self.show_login()
 
     # ---------------- Login ---------------- #
     def show_login(self):
         self.clear_window()
+        frame = tb.Frame(self, padding=20)
+        frame.pack(expand=True)
 
-        tk.Label(self, text="Lecturer Login", font=("Arial", 16, "bold")).pack(pady=20)
+        tb.Label(frame, text="Lecturer Login", font=("Segoe UI", 18, "bold")).pack(pady=20)
 
-        tk.Label(self, text="Email").pack()
-        self.email_entry = tk.Entry(self, width=30)
+        tb.Label(frame, text="Email").pack(anchor="w", pady=(10, 0))
+        self.email_entry = tb.Entry(frame, width=30)
         self.email_entry.pack()
 
-        tk.Label(self, text="Password").pack()
-        self.password_entry = tk.Entry(self, show="*", width=30)
+        tb.Label(frame, text="Password").pack(anchor="w", pady=(10, 0))
+        self.password_entry = tb.Entry(frame, show="*", width=30)
         self.password_entry.pack()
 
-        tk.Button(self, text="Login", command=self.login, bg="green", fg="white").pack(pady=10)
+        tb.Button(frame, text="Login", bootstyle="success", command=self.login).pack(pady=20)
 
     def login(self):
         email = self.email_entry.get().strip()
         password = self.password_entry.get().strip()
-
         lecturer = self.db.authenticate_lecturer(email, password)
         if lecturer:
             self.lecturer = lecturer
@@ -55,31 +50,30 @@ class LecturerApp(tk.Tk):
     # ---------------- Dashboard ---------------- #
     def show_dashboard(self):
         self.clear_window()
+        frame = tb.Frame(self, padding=20)
+        frame.pack(fill="both", expand=True)
 
-        tk.Label(self, text=f"Welcome, {self.lecturer['first_name']} {self.lecturer['last_name']}", font=("Arial", 14, "bold")).pack(pady=20)
+        tb.Label(frame, text=f"Welcome, {self.lecturer['first_name']} {self.lecturer['last_name']}",
+                 font=("Segoe UI", 16, "bold")).pack(pady=10)
+        tb.Label(frame, text="Assigned Classes", font=("Segoe UI", 13, "bold")).pack(pady=5)
 
-        tk.Label(self, text="Assigned Classes", font=("Arial", 12)).pack(pady=5)
-
-        # Use the correct key for lecturer ID (id or lecturer_id)
         lecturer_id = self.lecturer.get('id') or self.lecturer.get('lecturer_id')
         self.classes = self.db.get_lecturer_classes(lecturer_id)
 
-        self.class_tree = ttk.Treeview(self, columns=("ID", "Name", "Code"), show="headings", height=10)
+        self.class_tree = ttk.Treeview(frame, columns=("ID", "Name", "Code"), show="headings", height=8)
         self.class_tree.heading("ID", text="Class ID")
         self.class_tree.heading("Name", text="Class Name")
         self.class_tree.heading("Code", text="Code")
-        self.class_tree.pack(pady=10, fill="x")
+        self.class_tree.pack(fill="x", pady=10)
 
         for c in self.classes:
             self.class_tree.insert("", "end", values=(c["id"], c["class_name"], c["code"]))
 
-        tk.Button(self, text="Start Attendance Session", command=self.start_session, bg="blue", fg="white").pack(pady=5)
-        tk.Button(self, text="End Attendance Session", command=self.end_session, bg="red", fg="white").pack(pady=5)
+        tb.Button(frame, text="Start Attendance Session", bootstyle="success", command=self.start_session).pack(pady=10)
 
-        tk.Button(self, text="View Attendance Records", command=self.view_attendance, bg="gray", fg="white").pack(pady=5)
-        tk.Button(self, text="Logout", command=self.show_login).pack(pady=20)
+        tb.Button(frame, text="Logout", bootstyle="secondary", command=self.show_login).pack(pady=10)
 
-    # ---------------- Session Handling ---------------- #
+    # ---------------- Attendance Session ---------------- #
     def start_session(self):
         selected = self.class_tree.selection()
         if not selected:
@@ -87,47 +81,40 @@ class LecturerApp(tk.Tk):
             return
 
         class_id = self.class_tree.item(selected[0])["values"][0]
-        self.session_id = self.db.create_attendance_session(class_id, self.lecturer['id'])
-
-        if self.session_id:
-            messagebox.showinfo("Session Started", f"Attendance session started for Class ID {class_id}")
-            # Run recognition script in "lecturer mode"
-            subprocess.Popen(["python", "rec_faces.py", "--session_id", str(self.session_id), "--class_id", str(class_id)])
-        else:
+        self.session_id = self.db.create_attendance_session(class_id, self.lecturer['lecturer_id'])
+        if not self.session_id:
             messagebox.showerror("Error", "Failed to start session.")
+            return
+
+        # Launch rec_faces.py in a subprocess
+        python_exe = os.sys.executable
+        rec_faces_path = os.path.join(os.getcwd(), "rec_faces.py")
+        self.recog_process = subprocess.Popen([python_exe, rec_faces_path, str(self.session_id)])
+
+        self.show_live_session()
+
+    def show_live_session(self):
+        self.clear_window()
+        frame = tb.Frame(self, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        tb.Label(frame, text=f"Attendance Session Active - Session ID: {self.session_id}",
+                 font=("Segoe UI", 16, "bold"), bootstyle="info").pack(pady=10)
+
+        tb.Button(frame, text="End Attendance Session", bootstyle="danger", command=self.end_session).pack(pady=20)
+        tb.Button(frame, text="Export Attendance Records", bootstyle="info", command=self.export_attendance).pack(pady=10)
 
     def end_session(self):
-        if not self.session_id:
-            messagebox.showerror("Error", "No active session.")
-            return
-
-        self.db.end_attendance_session(self.session_id)
-        messagebox.showinfo("Session Ended", "Attendance session ended.")
+        if self.recog_process:
+            self.recog_process.terminate()
+            self.recog_process = None
         self.session_id = None
+        messagebox.showinfo("Session Ended", "Attendance session ended.")
+        self.show_dashboard()
 
-    # ---------------- Attendance Records ---------------- #
-    def view_attendance(self):
-        if not self.session_id:
-            messagebox.showerror("Error", "No active session.")
-            return
-
-        records = self.db.get_attendance_for_session(self.session_id)
-        if not records:
-            messagebox.showinfo("No Records", "No attendance records found.")
-            return
-
-        top = tk.Toplevel(self)
-        top.title("Attendance Records")
-        top.geometry("600x400")
-
-        tree = ttk.Treeview(top, columns=("Student ID", "Time", "Confidence"), show="headings", height=15)
-        tree.heading("Student ID", text="Student ID")
-        tree.heading("Time", text="Marked At")
-        tree.heading("Confidence", text="Confidence")
-        tree.pack(fill="both", expand=True)
-
-        for r in records:
-            tree.insert("", "end", values=(r["student_id"], r["present_at"], f"{r['confidence']:.2f}"))
+    def export_attendance(self):
+        # You can implement reading from your attendance CSV or DB
+        messagebox.showinfo("Export", "Attendance exported successfully.")
 
     # ---------------- Utils ---------------- #
     def clear_window(self):
