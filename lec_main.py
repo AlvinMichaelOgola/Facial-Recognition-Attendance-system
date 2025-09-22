@@ -81,7 +81,8 @@ class LecturerApp(tb.Window):
             return
 
         class_id = self.class_tree.item(selected[0])["values"][0]
-        self.session_id = self.db.create_attendance_session(class_id, self.lecturer['lecturer_id'])
+        session_name = f"Session for Class {class_id}"
+        self.session_id = self.db.create_attendance_session(class_id, self.lecturer['lecturer_id'], name=session_name)
         if not self.session_id:
             messagebox.showerror("Error", "Failed to start session.")
             return

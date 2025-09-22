@@ -41,6 +41,14 @@ class FaceRecognizer:
                         continue
                     x, y = max(0, x), max(0, y)
                     face_img = rgb_frame[y:y+h, x:x+w]
+                    # Debug: print shape and skip if invalid
+                    if face_img is None or face_img.size == 0:
+                        print(f"[DEBUG] Skipping empty face region at ({x},{y},{w},{h})")
+                        continue
+                    if len(face_img.shape) != 3 or face_img.shape[2] != 3:
+                        print(f"[DEBUG] Skipping invalid face region shape: {face_img.shape}")
+                        continue
+                    print(f"[DEBUG] Face region shape: {face_img.shape}")
                     face_imgs.append(cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR))
                     face_boxes.append((x, y, w, h))
                 if face_imgs:

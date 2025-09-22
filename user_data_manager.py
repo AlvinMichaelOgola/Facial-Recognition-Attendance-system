@@ -790,9 +790,9 @@ class UserDataManager:
         try:
             lecturer_id = str(lecturer_identifier)
             q = """
-                INSERT INTO attendance_sessions (class_id, lecturer_id, name, started_at, status)
+                INSERT INTO attendance_sessions_two (class_id, lecturer_id, name, started_at, status)
                 VALUES (%s, %s, %s, NOW(), 'active')
-            """
+                """
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(q, (class_id, lecturer_id, name or None))
@@ -806,7 +806,7 @@ class UserDataManager:
         """
         Marks a session as finished.
         """
-        q = "UPDATE attendance_sessions SET ended_at=NOW(), status='finished' WHERE id=%s"
+        q = "UPDATE attendance_sessions_two SET ended_at=NOW(), status='finished' WHERE id=%s"
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -820,9 +820,9 @@ class UserDataManager:
         Insert a recognized student's attendance record.
         """
         q = """
-            INSERT INTO attendance_records (session_id, student_id, present_at, confidence)
-            VALUES (%s, %s, NOW(), %s)
-        """
+                INSERT INTO attendance_records_two (session_id, student_id, present_at, confidence)
+                VALUES (%s, %s, NOW(), %s)
+            """
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -838,7 +838,7 @@ class UserDataManager:
         q = """
             SELECT ar.id, ar.session_id, ar.student_id, ar.present_at, ar.confidence,
                    u.first_name, u.last_name, s.course
-            FROM attendance_records ar
+                FROM attendance_records_two ar
             LEFT JOIN students s ON ar.student_id = s.student_id
             LEFT JOIN users u ON s.user_id = u.id
             WHERE ar.session_id=%s

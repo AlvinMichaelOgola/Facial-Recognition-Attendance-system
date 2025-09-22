@@ -477,7 +477,7 @@ class DashboardFrame(tk.Frame):
         params = []
 
         if search:
-            query += " AND (s.first_name LIKE %s OR s.last_name LIKE %s OR u.email LIKE %s)"
+            query += " AND (u.first_name LIKE %s OR u.last_name LIKE %s OR u.email LIKE %s)"
             params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
         if status_filter != "All":
