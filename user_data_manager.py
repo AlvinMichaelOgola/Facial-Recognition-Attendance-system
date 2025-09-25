@@ -815,7 +815,7 @@ class UserDataManager:
         except Exception:
             raise
 
-    def add_attendance_record(self, session_id: int, student_id: str, confidence: float) -> None:
+def add_attendance_record(self, session_id: int, student_id: str, confidence: float) -> None:
         """
         Insert a recognized student's attendance record.
         """
@@ -831,7 +831,7 @@ class UserDataManager:
         except Exception:
             raise
 
-    def get_attendance_for_session(self, session_id: int) -> List[Dict[str, Any]]:
+def get_attendance_for_session(self, session_id: int) -> List[Dict[str, Any]]:
         """
         Returns all attendance records for a session.
         """

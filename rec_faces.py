@@ -1,18 +1,19 @@
-import sys
-import cv2
+# rec_faces.py
 import os
 import time
-import psutil
 import datetime
 import threading
 import logging
+import psutil
+import cv2
+
 from embedding_loader import EmbeddingLoader
 from user_data_manager import DatabaseManager
 from face_recognizer import FaceRecognizer
 
-
+# ---------------- Config ----------------
 MODEL_NAME = 'Facenet'
-SIMILARITY_THRESHOLD = 0.7
+SIMILARITY_THRESHOLD = 0.9
 STABLE_FRAMES = 10
 DATA_DIR = "face_embeddings"
 embeddings_path = os.path.join(DATA_DIR, "embeddings.pkl")
@@ -20,28 +21,17 @@ user_info_path = os.path.join(DATA_DIR, "user_info.csv")
 attendance_file = os.path.join('data', 'attendance.csv')
 os.makedirs('data', exist_ok=True)
 
-# Set TEST_MODE to False for normal operation
-TEST_MODE = False
-
-# ---------------------------
-# Parse CLI arguments
-# ---------------------------
-
+# Logging configuration
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# ---------------------------
-# Load embeddings (all students)
-# ---------------------------
-
-# Load embeddings from the database for active students
+# ---------------- Load embeddings ----------------
+# Use DatabaseManager as loader dependency (adjust if your loader API differs)
 db_manager = DatabaseManager()
 loader = EmbeddingLoader(db_manager=db_manager)
 all_embeddings, all_labels = loader.load_embeddings(from_db=True)
-print(f"[DEBUG] Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} active students: {set(all_labels)}")
+logging.info(f"Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} active students: {set(all_labels)}")
 
-# ---------------------------
-# Face recognizer
-# ---------------------------
+# ---------------- Face recognizer ----------------
 recognizer = FaceRecognizer(
     MODEL_NAME,
     all_embeddings,
@@ -49,114 +39,137 @@ recognizer = FaceRecognizer(
     similarity_threshold=SIMILARITY_THRESHOLD,
     stable_frames=STABLE_FRAMES
 )
-import argparse
 
-# ---------------------------
-# Attendance state
-# ---------------------------
+# ---------------- Attendance State ----------------
+# session_active will be toggled by GUI start/end calls
 session_active = False
 marked_names = set()
 attendance_buffer = []
 BUFFER_SIZE = 5
 
 def flush_attendance():
+    """
+    Flush attendance_buffer to the attendance CSV file.
+    Each entry is expected to be a CSV line like: "student_id,timestamp\n"
+    """
     global attendance_buffer
     if attendance_buffer:
-        with open(attendance_file, 'a') as f:
-            for entry in attendance_buffer:
-                f.write(entry)
+        try:
+            with open(attendance_file, 'a', encoding='utf-8') as f:
+                for entry in attendance_buffer:
+                    f.write(entry)
+            logging.info(f"Flushed {len(attendance_buffer)} attendance records to {attendance_file}")
+        except Exception as e:
+            logging.error(f"Failed to flush attendance to {attendance_file}: {e}")
         attendance_buffer = []
 
-# ---------------------------
-# Recognition thread
-# ---------------------------
-recognition_thread = threading.Thread(target=recognizer.recognize_faces)
-
-# Parse session_id from command-line arguments
-parser = argparse.ArgumentParser(description="Face Recognition Attendance")
-parser.add_argument("session_id", type=int, help="Attendance session ID", nargs='?')
-args = parser.parse_args()
-SESSION_ID = args.session_id
+# ---------------- Recognition thread ----------------
+# The FaceRecognizer implementation should expose:
+# - recognize_faces() -> target for background thread
+# - result_lock -> threading.Lock used to synchronize access to recognizer.frame and recognizer.draw_faces
+# - draw_faces -> list of (box, identity, similarity, last_seen)
+# - frame attribute writable by GUI process_frame
+# - stop_threads flag to ask thread to stop
+recognition_thread = threading.Thread(target=recognizer.recognize_faces, daemon=True)
 recognition_thread.start()
 
-cap = cv2.VideoCapture(0)
-print("Press 's' to start attendance session. Press 'q' to quit.")
+# ---------------- Public API (for GUI) ----------------
+def start_session(session_id=None):
+    """
+    Called from GUI when session begins. Resets marks and sets session active.
+    session_id accepted for parity with DB flow.
+    """
+    global session_active, marked_names
+    session_active = True
+    marked_names = set()
+    logging.info(f"rec_faces: session started (session_id={session_id})")
 
-frame_count = 0
-last_time = time.time()
-fps = 0
+def end_session():
+    """
+    Called from GUI when session ends. Flushes buffer and disables marking.
+    """
+    global session_active
+    session_active = False
+    flush_attendance()
+    logging.info("rec_faces: session ended and buffer flushed")
 
-while True:
-    ret, new_frame = cap.read()
-    if not ret:
-        break
-    frame_count += 1
+def process_frame(frame):
+    """
+    Integration point for GUI:
+    - Accepts a BGR OpenCV frame (numpy array)
+    - Sends the frame copy to the recognizer via recognizer.frame (protected by result_lock)
+    - Reads recognizer.draw_faces (protected by result_lock) and draws boxes/labels on the provided frame
+    - Performs attendance marking (buffered) and returns any newly marked identities
+    Returns:
+        processed_frame (BGR image with overlays), recognized_names (list of identities that were newly marked)
+    """
+    global marked_names, attendance_buffer
+    recognized_names = []
 
-    # FPS calculation
-    now = time.time()
-    if frame_count > 1:
-        fps = 1 / (now - last_time)
-    last_time = now
+    # Update shared frame for recognition (non-blocking if recognizer not ready)
+    try:
+        with recognizer.result_lock:
+            recognizer.frame = frame.copy()
+    except Exception:
+        # recognizer may not be fully initialized; ignore
+        pass
 
-    # Update shared frame for recognition thread
-    with recognizer.result_lock:
-        recognizer.frame = new_frame.copy()
+    # Copy draw_faces snapshot
+    try:
+        with recognizer.result_lock:
+            draw_snapshot = list(recognizer.draw_faces)
+    except Exception:
+        draw_snapshot = []
 
-    # Draw all recent boxes/labels
-    with recognizer.result_lock:
-        for box, identity, similarity, last_seen in recognizer.draw_faces:
-            if (time.time() - last_seen) * fps <= STABLE_FRAMES:
-                x, y, w, h = box
-                cv2.rectangle(new_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(new_frame, f"{identity} {similarity:.2f}", (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    # Iterate detections and draw
+    for detection in draw_snapshot:
+        try:
+            box, identity, similarity, last_seen = detection
+            # box expected to be (x, y, w, h)
+            x, y, w, h = box
+            # Draw rectangle
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            # Draw label
+            label_text = f"{identity} {similarity:.2f}"
+            cv2.putText(frame, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-                # ---------------------------
-                # Attendance logic
-                # Skip in TEST_MODE
-                # ---------------------------
-                if not TEST_MODE:
-                    if session_active and identity != "Unknown" and identity not in marked_names and similarity >= 0.85:
-                        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        attendance_buffer.append(f"{identity},{timestamp}\n")
-                        if len(attendance_buffer) >= BUFFER_SIZE:
-                            flush_attendance()
-                        marked_names.add(identity)
-                        logging.info(f"Marked attendance for {identity} at {timestamp}")
+            # Attendance marking: require session active, not Unknown, not already marked, and high confidence
+            if session_active and identity != "Unknown" and identity not in marked_names and similarity >= 0.85:
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                attendance_buffer.append(f"{identity},{timestamp}\n")
+                if len(attendance_buffer) >= BUFFER_SIZE:
+                    flush_attendance()
+                marked_names.add(identity)
+                logging.info(f"rec_faces: Marked attendance for {identity} at {timestamp}")
+                recognized_names.append(identity)
+        except Exception:
+            # ignore malformed detection entries
+            continue
 
-    # ---------------------------
     # Overlay system info
-    # ---------------------------
-    cpu = psutil.cpu_percent()
-    mem = psutil.virtual_memory().percent
-    perf_text = f"CPU: {cpu:.0f}%  MEM: {mem:.0f}%  FPS: {fps:.1f}"
-    cv2.putText(new_frame, perf_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    try:
+        cpu = psutil.cpu_percent(interval=None)
+        mem = psutil.virtual_memory().percent
+        perf_text = f"CPU: {cpu:.0f}%  MEM: {mem:.0f}%"
+        cv2.putText(frame, perf_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    except Exception:
+        pass
 
-    if session_active and not TEST_MODE:
-        cv2.putText(new_frame, "ATTENDANCE ACTIVE", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+    return frame, recognized_names
 
-    cv2.imshow("Recognize Faces", new_frame)
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):
-        break
-    elif key == ord('s') and not TEST_MODE:
-        session_active = True
-        marked_names.clear()
-        print("[INFO] Attendance session started.")
+def get_marked_names():
+    """Return a copy of marked names set."""
+    return set(marked_names)
 
-    # --- FPS CAP ---
-    target_fps = 30
-    frame_time = 1.0 / target_fps
-    elapsed = time.time() - now
-    if elapsed < frame_time:
-        time.sleep(frame_time - elapsed)
-
-# ---------------------------
-# Cleanup
-# ---------------------------
-recognizer.stop_threads = True
-recognition_thread.join()
-cap.release()
-cv2.destroyAllWindows()
-if not TEST_MODE:
+def cleanup():
+    """Stop recognizer thread and flush buffers."""
+    try:
+        recognizer.stop_threads = True
+    except Exception:
+        pass
+    try:
+        if recognition_thread.is_alive():
+            recognition_thread.join(timeout=2.0)
+    except Exception:
+        pass
     flush_attendance()
