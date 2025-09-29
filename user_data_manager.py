@@ -87,6 +87,89 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+
+    def get_attendance_for_session(self, session_id: int) -> list:
+        """
+        Returns all attendance records for a session.
+        """
+        q = """
+            SELECT ar.id, ar.session_id, ar.student_id, ar.present_at, ar.confidence,
+                   u.first_name, u.last_name, s.course
+                FROM attendance_records_two ar
+            LEFT JOIN students s ON ar.student_id = s.student_id
+            LEFT JOIN users u ON s.user_id = u.id
+            WHERE ar.session_id=%s
+            ORDER BY ar.present_at ASC
+        """
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (session_id,))
+                    return cur.fetchall()
+        except Exception:
+            raise
+
+    def get_session_by_id(self, session_id: int):
+        """Fetch session info (name, class_id, started_at) by session_id."""
+        q = "SELECT id, class_id, name, started_at FROM attendance_sessions_two WHERE id=%s"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, (session_id,))
+                return cur.fetchone()
+
+    def get_class_by_id(self, class_id: int):
+        """Fetch class info (class_name) by class_id."""
+        q = "SELECT id, class_name FROM classes_two WHERE id=%s"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, (class_id,))
+                return cur.fetchone()
+
+    def create_attendance_session(self, class_id: int, lecturer_identifier: Any, name: str = None) -> int:
+        """
+        Creates an attendance session row and returns session_id.
+        lecturer_identifier should be lecturer_id string like 'L001'.
+        """
+        try:
+            lecturer_id = str(lecturer_identifier)
+            q = """
+                INSERT INTO attendance_sessions_two (class_id, lecturer_id, name, started_at, status)
+                VALUES (%s, %s, %s, NOW(), 'active')
+                """
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (class_id, lecturer_id, name or None))
+                    session_id = cur.lastrowid
+                conn.commit()
+            return session_id
+        except Exception:
+            raise
+
+    def assign_students_to_class(self, class_id, student_ids):
+        """
+        Assigns a list of student_ids to a class in class_students_two. Removes previous assignments for that class and adds the new ones.
+        """
+        if not student_ids:
+            return
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                # Remove existing assignments for this class
+                cur.execute("DELETE FROM class_students_two WHERE class_id = %s", (class_id,))
+                # Insert new assignments
+                insert_q = "INSERT INTO class_students_two (class_id, student_id) VALUES (%s, %s)"
+                for sid in student_ids:
+                    cur.execute(insert_q, (class_id, sid))
+            conn.commit()
+
+    def get_student_ids_for_class(self, class_id):
+        """
+        Returns a list of student_ids assigned to the given class_id.
+        """
+        q = "SELECT student_id FROM class_students_two WHERE class_id = %s"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, (class_id,))
+                return [row["student_id"] for row in cur.fetchall()]
     def get_cohorts_two(self):
         """Return all cohorts from cohorts_two table."""
         q = "SELECT * FROM cohorts_two"
@@ -578,9 +661,14 @@ class UserDataManager:
 
     def get_lecturer_by_id(self, lecturer_pk: int) -> Optional[Dict[str, Any]]:
         """
-        Fetch a single lecturer by their lecturers.id (PK).
+        Fetch a single lecturer by their lecturers.id (PK), including first_name and last_name from users.
         """
-        q = "SELECT * FROM lecturers WHERE id = %s LIMIT 1"
+        q = """
+            SELECT l.*, u.first_name, u.last_name
+            FROM lecturers l
+            LEFT JOIN users u ON l.user_id = u.id
+            WHERE l.id = %s LIMIT 1
+        """
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -709,9 +797,9 @@ class UserDataManager:
     # ------------------ Classes & Assignments ------------------
     def get_classes(self) -> List[Dict[str, Any]]:
         """
-        Return available classes (id, class_name, code, cohort_id)
+        Return available classes (id, class_name, code, cohort_id) from classes_two
         """
-        q = "SELECT id, cohort_id, class_name, code FROM classes ORDER BY class_name ASC"
+        q = "SELECT id, cohort_id, class_name, code FROM classes_two ORDER BY class_name ASC"
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -781,41 +869,8 @@ class UserDataManager:
         except Exception:
             raise
 
-    # ------------------ Attendance ------------------
-    def create_attendance_session(self, class_id: int, lecturer_identifier: Any, name: Optional[str] = None) -> int:
-        """
-        Creates an attendance session row and returns session_id.
-        lecturer_identifier should be lecturer_id string like 'L001'.
-        """
-        try:
-            lecturer_id = str(lecturer_identifier)
-            q = """
-                INSERT INTO attendance_sessions_two (class_id, lecturer_id, name, started_at, status)
-                VALUES (%s, %s, %s, NOW(), 'active')
-                """
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(q, (class_id, lecturer_id, name or None))
-                    session_id = cur.lastrowid
-                conn.commit()
-            return session_id
-        except Exception:
-            raise
 
-    def end_attendance_session(self, session_id: int) -> None:
-        """
-        Marks a session as finished.
-        """
-        q = "UPDATE attendance_sessions_two SET ended_at=NOW(), status='finished' WHERE id=%s"
-        try:
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(q, (session_id,))
-                conn.commit()
-        except Exception:
-            raise
-
-def add_attendance_record(self, session_id: int, student_id: str, confidence: float) -> None:
+    def add_attendance_record(self, session_id: int, student_id: str, confidence: float) -> None:
         """
         Insert a recognized student's attendance record.
         """

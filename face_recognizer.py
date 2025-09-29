@@ -76,3 +76,10 @@ class FaceRecognizer:
                 with self.result_lock:
                     self.draw_faces = new_draw_faces
             time.sleep(0.01)
+
+    def set_embeddings(self, all_embeddings, all_labels):
+        """
+        Update the embeddings and labels used for recognition.
+        """
+        self.all_embeddings = all_embeddings
+        self.all_labels = all_labels

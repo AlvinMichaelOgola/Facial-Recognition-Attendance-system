@@ -33,23 +33,37 @@ class EmbeddingLoader:
                         active_names.add(row['Name'])
         return active_names
 
-    def load_embeddings(self, active_names=None, from_db=False):
+    def load_embeddings(self, active_names=None, from_db=False, student_ids=None):
         """
         Loads embeddings either from pickle/csv or from the database.
         If from_db=True and db_manager is set, loads from DB for active students only.
         """
         if from_db and self.user_data_manager is not None:
-            # Load from DB for active students
-            records = self.user_data_manager.get_all_face_embeddings()
+            # Load from DB for active students, or only those in student_ids if provided
+            if student_ids is not None:
+                print(f"[DEBUG] Requested embeddings for student_ids: {student_ids}")
+                if not student_ids:
+                    print("[DEBUG] No student_ids provided, returning empty array.")
+                    return np.array([]), []
+                format_strings = ','.join(['%s'] * len(student_ids))
+                q = f"SELECT student_id, embedding FROM face_embeddings WHERE student_id IN ({format_strings})"
+                with self.db_manager.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(q, tuple(student_ids))
+                        records = cur.fetchall()
+                print(f"[DEBUG] Found {len(records)} embeddings in DB for requested students.")
+            else:
+                records = self.user_data_manager.get_all_face_embeddings()
+                print(f"[DEBUG] Loaded all embeddings from DB: {len(records)} records.")
             all_embeddings = []
             all_labels = []
             for rec in records:
-                # rec['embedding'] is a BLOB; unpickle if needed
                 emb = rec['embedding']
                 if isinstance(emb, (bytes, bytearray)):
                     emb = pickle.loads(emb)
                 all_embeddings.append(emb)
                 all_labels.append(rec['student_id'])
+            print(f"[DEBUG] Returning {len(all_embeddings)} embeddings, labels: {all_labels}")
             return np.array(all_embeddings), all_labels
         # Fallback: load from pickle/csv
         if not self.embeddings_path or not os.path.exists(self.embeddings_path):

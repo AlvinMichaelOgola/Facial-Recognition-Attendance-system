@@ -228,6 +228,71 @@ class LoginFrame(tk.Frame):
 # Dashboard Frame (full)
 # -------------------------
 class DashboardFrame(tk.Frame):
+    def register_student(self):
+        # Validate
+        first = self.add_vars["first_name"].get().strip()
+        last = self.add_vars["last_name"].get().strip()
+        email = self.add_vars["email"].get().strip()
+        if not first or not last or not email:
+            messagebox.showerror("Validation", "First name, last name, and email are required.")
+            return
+
+        user_dict = {
+            "first_name": first,
+            "last_name": last,
+            "other_names": self.add_vars["other_names"].get().strip(),
+            "email": email,
+            "phone": self.add_vars["phone"].get().strip(),
+            "password": (email + "_pass"),
+            "role": "Student",
+            "registration_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "active": 1,
+            "is_active": 1
+        }
+        student_dict = {
+            "student_id": None,
+            "school": None,
+            "cohort": None,
+            "course": self.add_vars["course"].get().strip(),
+            "year_of_study": self.add_vars["year_of_study"].get().strip()
+        }
+
+        try:
+            student_id = self.user_manager.add_user(user_dict, student_dict)
+            if not student_id or str(student_id).lower() == 'none':
+                messagebox.showerror("Registration Error", "Registration failed: No student ID returned. Please check the database and try again.")
+                self.last_registered_student = None
+                self.capture_btn.config(state="disabled")
+                return
+            self.last_registered_student = {**user_dict, **student_dict, "student_id": student_id}
+            messagebox.showinfo("Registered", f"Student {first} {last} registered. Student ID: {student_id}")
+            for sv in self.add_vars.values():
+                sv.set("")
+            self.capture_btn.config(state="normal")
+            # Automatically launch face capture after registration
+            self.launch_face_capture()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to register student: {e}")
+
+    def launch_face_capture(self):
+        # Launch face capture for the last registered student
+        if not self.last_registered_student or not self.last_registered_student.get("student_id"):
+            messagebox.showerror("Error", "No student registered to capture face for.")
+            return
+        student_id = self.last_registered_student["student_id"]
+        try:
+            python_exe = sys.executable
+            script_path = resource_path("add_faces.py")
+            if not os.path.exists(script_path):
+                messagebox.showerror("Error", f"add_faces.py not found at {script_path}")
+                return
+            proc = subprocess.run([python_exe, script_path, str(student_id)])
+            if proc.returncode == 0:
+                messagebox.showinfo("Success", "Face capture completed.")
+            else:
+                messagebox.showerror("Error", "Face capture failed (see terminal).")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to run face capture: {e}")
     def __init__(self, parent, app: Application):
         super().__init__(parent, bg="#f4f6f8")
         self.app = app
@@ -304,77 +369,135 @@ class DashboardFrame(tk.Frame):
         self.capture_btn.pack(side="left", padx=6)
         self.last_registered_student = None
 
-    def register_student(self):
-        print("[DEBUG] register_student called")
-        # Validate
-        first = self.add_vars["first_name"].get().strip()
-        last = self.add_vars["last_name"].get().strip()
-        email = self.add_vars["email"].get().strip()
-        if not first or not last or not email:
-            messagebox.showerror("Validation", "First name, last name, and email are required.")
-            return
-
-        user_dict = {
-            "first_name": first,
-            "last_name": last,
-            "other_names": self.add_vars["other_names"].get().strip(),
-            "email": email,
-            "phone": self.add_vars["phone"].get().strip(),
-            "password": (email + "_pass"),
-            "role": "Student",
-            "registration_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "active": 1,
-            "is_active": 1
-        }
-        student_dict = {
-            "student_id": None,
-            "school": None,
-            "cohort": None,
-            "course": self.add_vars["course"].get().strip(),
-            "year_of_study": self.add_vars["year_of_study"].get().strip()
-        }
-
-        try:
-            student_id = self.user_manager.add_user(user_dict, student_dict)
-            print(f"[DEBUG] add_user returned student_id: {student_id}")
-            if not student_id or str(student_id).lower() == 'none':
-                messagebox.showerror("Registration Error", "Registration failed: No student ID returned. Please check the database and try again.")
-                self.last_registered_student = None
-                self.capture_btn.config(state="disabled")
+    def assign_students_to_class_dialog(self):
+        def load_assigned_students(event=None):
+            # Clear selected list and dict
+            selected_lb.delete(0, tk.END)
+            selected_students.clear()
+            selected = class_var.get()
+            if not selected:
                 return
-            self.last_registered_student = {**user_dict, **student_dict, "student_id": student_id}
-            messagebox.showinfo("Registered", f"Student {first} {last} registered. Student ID: {student_id}")
-            for sv in self.add_vars.values():
-                sv.set("")
-            self.capture_btn.config(state="normal")
-            # Automatically launch face capture after registration
-            self.launch_face_capture()
-        except Exception as e:
-            print(f"[ERROR] Exception in register_student: {e}")
-            traceback.print_exc()
-            messagebox.showerror("Error", f"Failed to register student: {e}")
-            self.last_registered_student = None
-            self.capture_btn.config(state="disabled")
+            class_id = selected.split(" - ", 1)[0]
+            try:
+                assigned = self.user_manager.get_student_ids_for_class(class_id)
+                # Fetch user info for display
+                all_students = self.user_manager.get_users()
+                student_map = {str(s.get("student_id")): s for s in all_students}
+                for sid in assigned:
+                    s = student_map.get(str(sid))
+                    if s:
+                        name = f"{sid} - {s.get('first_name','')} {s.get('last_name','')} ({s.get('email','')})"
+                        selected_students[str(sid)] = name
+                        selected_lb.insert(tk.END, name)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load assigned students: {e}")
 
-    def launch_face_capture(self):
-        print(f"[DEBUG] launch_face_capture called. last_registered_student: {self.last_registered_student}")
-        if not self.last_registered_student or not self.last_registered_student.get("student_id") or str(self.last_registered_student.get("student_id")).lower() == 'none':
-            messagebox.showerror("Error", "No valid student ID found for face capture. Please register a student first.")
-            return
-        student_id = str(self.last_registered_student["student_id"])
+        # Dialog to assign students to a class (modern flow)
+
+        # Dialog to assign students to a class (modern flow)
+        dlg = tk.Toplevel(self)
+        dlg.title("Assign Students to Class")
+        dlg.geometry("520x420")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        # Fetch classes
         try:
-            python_exe = sys.executable
-            script_path = resource_path("add_faces.py")
-            if not os.path.exists(script_path):
-                messagebox.showerror("Error", f"add_faces.py not found at {script_path}")
+            classes = self.user_manager.get_classes()
+        except Exception:
+            classes = []
+        class_choices = [(str(c.get("id")), c.get("class_name", str(c.get("id")))) for c in classes]
+        tk.Label(dlg, text="Select Class:").pack(pady=(10, 2))
+        class_var = tk.StringVar()
+        class_combo = ttk.Combobox(dlg, textvariable=class_var, values=[f"{cid} - {name}" for cid, name in class_choices], state="readonly", width=40)
+        class_combo.pack(pady=(0, 10))
+        if not class_choices:
+            messagebox.showwarning("No Classes", "No classes found. Please add a class first.")
+
+        # Search bar
+        search_frame = tk.Frame(dlg)
+        search_frame.pack(pady=(4, 2))
+        tk.Label(search_frame, text="Search Students:").pack(side="left", padx=(0, 4))
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(search_frame, textvariable=search_var, width=32)
+        search_entry.pack(side="left")
+
+        # Listbox for search results
+        results_lb = tk.Listbox(dlg, selectmode="browse", width=54, height=10)
+        results_lb.pack(padx=12, pady=(6, 2))
+
+        # Listbox for selected students
+        tk.Label(dlg, text="Selected Students:").pack(pady=(4, 0))
+        selected_lb = tk.Listbox(dlg, selectmode="extended", width=54, height=5)
+        selected_lb.pack(padx=12, pady=(2, 6))
+
+        # Store selected students as a dict: sid -> display name
+        selected_students = {}
+
+        def search_students(event=None):
+            # If class changes, reload assigned students
+            if event and event.type == '34':  # <<ComboboxSelected>>
+                load_assigned_students()
+            query = search_var.get().strip().lower()
+            results_lb.delete(0, tk.END)
+            if not query:
                 return
-            proc = subprocess.run([python_exe, script_path, student_id])
-            if proc.returncode == 0:
-                messagebox.showinfo("Success", "Face capture completed.")
-            else:
-                messagebox.showerror("Error", "Face capture failed (see terminal).")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to run face capture: {e}")
+            try:
+                all_students = self.user_manager.get_users()
+            except Exception:
+                all_students = []
+            for s in all_students:
+                # Only show active accounts
+                if not s.get('active', 1):
+                    continue
+                sid = str(s.get("student_id"))
+                name = f"{sid} - {s.get('first_name','')} {s.get('last_name','')} ({s.get('email','')})"
+                if query in sid.lower() or query in s.get('first_name','').lower() or query in s.get('last_name','').lower() or query in s.get('email','').lower():
+                    results_lb.insert(tk.END, name)
+
+        def add_to_selected(event=None):
+            sel = results_lb.curselection()
+            if not sel:
+                return
+            val = results_lb.get(sel[0])
+            sid = val.split(" - ", 1)[0]
+            if sid not in selected_students:
+                selected_students[sid] = val
+                selected_lb.insert(tk.END, val)
+
+        def remove_from_selected(event=None):
+            sel = list(selected_lb.curselection())
+            for i in reversed(sel):
+                val = selected_lb.get(i)
+                sid = val.split(" - ", 1)[0]
+                if sid in selected_students:
+                    del selected_students[sid]
+                selected_lb.delete(i)
+
+        results_lb.bind("<Double-Button-1>", add_to_selected)
+        selected_lb.bind("<Delete>", remove_from_selected)
+        search_entry.bind("<KeyRelease>", search_students)
+        class_combo.bind("<<ComboboxSelected>>", load_assigned_students)
+
+        def confirm_assignment():
+            selected_class = class_var.get()
+            if not selected_class:
+                messagebox.showerror("Validation", "Please select a class.")
+                return
+            class_id = selected_class.split(" - ", 1)[0]
+            if not selected_students:
+                messagebox.showerror("Validation", "Please add at least one student to assign.")
+                return
+            student_ids = list(selected_students.keys())
+            try:
+                self.user_manager.assign_students_to_class(class_id, student_ids)
+                messagebox.showinfo("Success", f"Assigned {len(student_ids)} student(s) to class.")
+                dlg.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to assign students: {e}")
+
+        confirm_btn = tk.Button(dlg, text="Confirm Assignment", command=confirm_assignment, width=20)
+        confirm_btn.pack(pady=12)
 
     # ---------------- Manage Users ----------------
     def show_manage_users(self):
@@ -429,6 +552,7 @@ class DashboardFrame(tk.Frame):
         tk.Button(btn_frame, text="Edit Selected", command=self.edit_user).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Capture Face", command=self.capture_face_for_selected).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Refresh", command=lambda: self.load_users(limit=20)).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Assign to Class", command=self.assign_students_to_class_dialog, width=16).pack(side="left", padx=6)
 
         # 🔑 Load first 20 users at startup
         self.load_users(limit=20)
@@ -1228,74 +1352,75 @@ class LecturerDialog(tk.Toplevel):
 
 
 # -------------------------
-# Edit User Dialog (students)
-# -------------------------
-class EditUserDialog(tk.Toplevel):
-    def __init__(self, parent: DashboardFrame, user: dict, user_manager: UserDataManager, on_saved=None):
-        super().__init__(parent)
-        self.title("Edit User")
-        self.geometry("480x420")
-        self.grab_set()
-        self.parent = parent
-        self.user = user
-        self.user_manager = user_manager
-        self.on_saved = on_saved
+        # Dialog to assign students to a class (modern flow)
+        dlg = tk.Toplevel(self)
+        dlg.title("Assign Students to Class")
+        dlg.geometry("520x420")
+        dlg.transient(self)
+        dlg.grab_set()
 
-        frame = tk.Frame(self, padx=12, pady=12)
-        frame.pack(fill="both", expand=True)
-
-        fields = [
-            ("First Name", "first_name"),
-            ("Last Name", "last_name"),
-            ("Email", "email"),
-            ("Phone", "phone"),
-            ("Course", "course"),
-            ("Year", "year_of_study"),
-            ("Role", "role")
-        ]
-        self.vars = {}
-        for i, (label, key) in enumerate(fields):
-            tk.Label(frame, text=label + ":", anchor="w").grid(row=i, column=0, sticky="w", pady=6)
-            sv = tk.StringVar(value=str(user.get(key, "")))
-            tk.Entry(frame, textvariable=sv, width=36).grid(row=i, column=1, pady=6)
-            self.vars[key] = sv
-
-        btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=12)
-        tk.Button(btn_frame, text="Save", command=self.save, width=12).pack(side="left", padx=6)
-        tk.Button(btn_frame, text="Cancel", command=self.destroy, width=12).pack(side="left", padx=6)
-
-    def save(self):
-        if not self.vars["first_name"].get().strip() or not self.vars["last_name"].get().strip():
-            messagebox.showerror("Validation", "First and last names are required.")
-            return
-
-        user_updates = {
-            "first_name": self.vars["first_name"].get().strip(),
-            "last_name": self.vars["last_name"].get().strip(),
-            "email": self.vars["email"].get().strip(),
-            "phone": self.vars["phone"].get().strip(),
-            "role": self.vars["role"].get().strip()
-        }
-        student_updates = {
-            "course": self.vars["course"].get().strip(),
-            "year_of_study": self.vars["year_of_study"].get().strip()
-        }
-
-        student_id = self.user.get("student_id") or ""
+        # Fetch classes
         try:
-            self.user_manager.update_user(student_id, user_updates, student_updates)
-            messagebox.showinfo("Saved", "User updated successfully.")
-            if callable(self.on_saved):
-                self.on_saved()
-            self.destroy()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to update user: {e}")
+            classes = self.user_manager.get_classes()
+        except Exception:
+            classes = []
+        class_choices = [(str(c.get("id")), c.get("class_name", str(c.get("id")))) for c in classes]
 
+        tk.Label(dlg, text="Select Class:").pack(pady=(10, 2))
+        class_var = tk.StringVar()
+        class_combo = ttk.Combobox(dlg, textvariable=class_var, values=[f"{cid} - {name}" for cid, name in class_choices], state="readonly", width=40)
+        class_combo.pack(pady=(0, 10))
 
-# -------------------------
-# Run if module executed
-# -------------------------
-if __name__ == "__main__":
-    app = Application()
-    app.mainloop()
+        # Search bar
+        search_frame = tk.Frame(dlg)
+        search_frame.pack(pady=(4, 2))
+        tk.Label(search_frame, text="Search Students:").pack(side="left", padx=(0, 4))
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(search_frame, textvariable=search_var, width=32)
+        search_entry.pack(side="left")
+
+        # Listbox for search results
+        results_lb = tk.Listbox(dlg, selectmode="extended", width=54, height=13)
+        results_lb.pack(padx=12, pady=(6, 2))
+
+        def search_students(event=None):
+            query = search_var.get().strip().lower()
+            results_lb.delete(0, tk.END)
+            if not query:
+                return
+            try:
+                all_students = self.user_manager.get_users()
+            except Exception:
+                all_students = []
+            for s in all_students:
+                sid = str(s.get("student_id"))
+                name = f"{sid} - {s.get('first_name','')} {s.get('last_name','')} ({s.get('email','')})"
+                if query in sid.lower() or query in s.get('first_name','').lower() or query in s.get('last_name','').lower() or query in s.get('email','').lower():
+                    results_lb.insert(tk.END, name)
+
+        search_entry.bind("<KeyRelease>", search_students)
+
+        def confirm_assignment():
+            selected_class = class_var.get()
+            if not selected_class:
+                messagebox.showerror("Validation", "Please select a class.")
+                return
+            class_id = selected_class.split(" - ", 1)[0]
+            sel_indices = results_lb.curselection()
+            if not sel_indices:
+                messagebox.showerror("Validation", "Please select at least one student to assign.")
+                return
+            student_ids = []
+            for i in sel_indices:
+                val = results_lb.get(i)
+                sid = val.split(" - ", 1)[0]
+                student_ids.append(sid)
+            try:
+                self.user_manager.assign_students_to_class(class_id, student_ids)
+                messagebox.showinfo("Success", f"Assigned {len(student_ids)} student(s) to class.")
+                dlg.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to assign students: {e}")
+
+        confirm_btn = tk.Button(dlg, text="Confirm Assignment", command=confirm_assignment, width=20)
+        confirm_btn.pack(pady=12)

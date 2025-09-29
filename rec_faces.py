@@ -8,7 +8,7 @@ import psutil
 import cv2
 
 from embedding_loader import EmbeddingLoader
-from user_data_manager import DatabaseManager
+from user_data_manager import UserDataManager
 from face_recognizer import FaceRecognizer
 
 # ---------------- Config ----------------
@@ -18,50 +18,80 @@ STABLE_FRAMES = 10
 DATA_DIR = "face_embeddings"
 embeddings_path = os.path.join(DATA_DIR, "embeddings.pkl")
 user_info_path = os.path.join(DATA_DIR, "user_info.csv")
-attendance_file = os.path.join('data', 'attendance.csv')
 os.makedirs('data', exist_ok=True)
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# ---------------- Load embeddings ----------------
-# Use DatabaseManager as loader dependency (adjust if your loader API differs)
-db_manager = DatabaseManager()
-loader = EmbeddingLoader(db_manager=db_manager)
-all_embeddings, all_labels = loader.load_embeddings(from_db=True)
-logging.info(f"Loaded {len(all_embeddings)} embeddings for {len(set(all_labels))} active students: {set(all_labels)}")
-
-# ---------------- Face recognizer ----------------
-recognizer = FaceRecognizer(
-    MODEL_NAME,
-    all_embeddings,
-    all_labels,
-    similarity_threshold=SIMILARITY_THRESHOLD,
-    stable_frames=STABLE_FRAMES
-)
+db_manager = UserDataManager()
+loader = EmbeddingLoader(db_manager=db_manager.db_manager)
+recognizer = None
+all_embeddings = None
+all_labels = None
 
 # ---------------- Attendance State ----------------
 # session_active will be toggled by GUI start/end calls
+
 session_active = False
 marked_names = set()
 attendance_buffer = []
 BUFFER_SIZE = 5
+current_session_id = None
 
 def flush_attendance():
     """
-    Flush attendance_buffer to the attendance CSV file.
-    Each entry is expected to be a CSV line like: "student_id,timestamp\n"
+    On session end, write only the current session's attendance records to the CSV with proper columns, overwriting previous content.
     """
-    global attendance_buffer
-    if attendance_buffer:
-        try:
-            with open(attendance_file, 'a', encoding='utf-8') as f:
-                for entry in attendance_buffer:
-                    f.write(entry)
-            logging.info(f"Flushed {len(attendance_buffer)} attendance records to {attendance_file}")
-        except Exception as e:
-            logging.error(f"Failed to flush attendance to {attendance_file}: {e}")
-        attendance_buffer = []
+    import csv
+    global current_session_id
+    try:
+        records = db_manager.get_attendance_for_session(current_session_id)
+        fieldnames = [
+            'student_id', 'first_name', 'last_name', 'course', 'present_at', 'confidence'
+        ]
+        # Fetch session and class info for filename
+        session_info = db_manager.get_session_by_id(current_session_id)
+        class_info = db_manager.get_class_by_id(session_info['class_id']) if session_info else None
+        # Fetch lecturer name
+        lecturer_name = "lecturer"
+        if session_info and session_info.get('lecturer_id'):
+            try:
+                lec = db_manager.get_lecturer_by_id(session_info['lecturer_id'])
+                if lec:
+                    first = lec.get('first_name') or ''
+                    last = lec.get('last_name') or ''
+                    lecturer_name = f"{first}_{last}".strip('_')
+            except Exception:
+                pass
+        session_name = session_info['name'] if session_info and session_info.get('name') else f'session_{current_session_id}'
+        class_name = class_info['class_name'] if class_info and class_info.get('class_name') else 'unknown_class'
+        date_str = session_info['started_at'].strftime('%Y-%m-%d') if session_info and session_info.get('started_at') else time.strftime('%Y-%m-%d')
+        # Sanitize for filename
+        def sanitize(s):
+            return ''.join(c for c in str(s) if c.isalnum() or c in ('-_')).rstrip()
+        session_name_safe = sanitize(session_name).replace(' ', '_')
+        class_name_safe = sanitize(class_name).replace(' ', '_')
+        lecturer_name_safe = sanitize(lecturer_name).replace(' ', '_')
+        session_csv = os.path.join('data', f'attendance_{date_str}_{lecturer_name_safe}_{class_name_safe}_{current_session_id}.csv')
+        with open(session_csv, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            if records and len(records) > 0:
+                for rec in records:
+                    writer.writerow({
+                        'student_id': rec.get('student_id'),
+                        'first_name': rec.get('first_name'),
+                        'last_name': rec.get('last_name'),
+                        'course': rec.get('course'),
+                        'present_at': rec.get('present_at'),
+                        'confidence': rec.get('confidence'),
+                    })
+            else:
+                # Write a message row if no attendance was recorded
+                writer.writerow({k: 'NO ATTENDANCE RECORDED' if k == 'student_id' else '' for k in fieldnames})
+        logging.info(f"Wrote {len(records) if records else 0} attendance records for session {current_session_id} to {session_csv}")
+    except Exception as e:
+        logging.error(f"Failed to write attendance CSV for session {current_session_id}: {e}")
 
 # ---------------- Recognition thread ----------------
 # The FaceRecognizer implementation should expose:
@@ -70,19 +100,28 @@ def flush_attendance():
 # - draw_faces -> list of (box, identity, similarity, last_seen)
 # - frame attribute writable by GUI process_frame
 # - stop_threads flag to ask thread to stop
-recognition_thread = threading.Thread(target=recognizer.recognize_faces, daemon=True)
-recognition_thread.start()
+
 
 # ---------------- Public API (for GUI) ----------------
-def start_session(session_id=None):
+def start_session(session_id=None, student_ids=None):
     """
     Called from GUI when session begins. Resets marks and sets session active.
-    session_id accepted for parity with DB flow.
+    If student_ids is provided, reload embeddings for only those students.
     """
-    global session_active, marked_names
+    global session_active, marked_names, all_embeddings, all_labels, recognizer, recognition_thread, current_session_id
     session_active = True
     marked_names = set()
-    logging.info(f"rec_faces: session started (session_id={session_id})")
+    current_session_id = session_id
+    # Always reload embeddings for the session (required for recognizer init)
+    if student_ids is not None:
+        all_embeddings, all_labels = loader.load_embeddings(from_db=True, student_ids=student_ids)
+    else:
+        all_embeddings, all_labels = loader.load_embeddings(from_db=True)
+    # (Re)create recognizer with correct args
+    recognizer = FaceRecognizer(MODEL_NAME, all_embeddings, all_labels, similarity_threshold=SIMILARITY_THRESHOLD, stable_frames=STABLE_FRAMES)
+    recognition_thread = threading.Thread(target=recognizer.recognize_faces, daemon=True)
+    recognition_thread.start()
+    logging.info(f"rec_faces: session started (session_id={session_id}) with {len(all_embeddings)} embeddings for students: {set(all_labels)}")
 
 def end_session():
     """
@@ -91,7 +130,8 @@ def end_session():
     global session_active
     session_active = False
     flush_attendance()
-    logging.info("rec_faces: session ended and buffer flushed")
+    cleanup()
+    logging.info("rec_faces: session ended, buffer flushed, and recognition thread stopped")
 
 def process_frame(frame):
     """
@@ -135,13 +175,14 @@ def process_frame(frame):
 
             # Attendance marking: require session active, not Unknown, not already marked, and high confidence
             if session_active and identity != "Unknown" and identity not in marked_names and similarity >= 0.85:
-                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                attendance_buffer.append(f"{identity},{timestamp}\n")
-                if len(attendance_buffer) >= BUFFER_SIZE:
-                    flush_attendance()
-                marked_names.add(identity)
-                logging.info(f"rec_faces: Marked attendance for {identity} at {timestamp}")
-                recognized_names.append(identity)
+                try:
+                    # Save attendance to DB
+                    db_manager.add_attendance_record(current_session_id, identity, float(similarity))
+                    marked_names.add(identity)
+                    logging.info(f"rec_faces: Marked attendance for {identity} (saved to DB)")
+                    recognized_names.append(identity)
+                except Exception as e:
+                    logging.error(f"Failed to save attendance for {identity}: {e}")
         except Exception:
             # ignore malformed detection entries
             continue
