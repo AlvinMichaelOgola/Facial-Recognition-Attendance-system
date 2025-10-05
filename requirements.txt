@@ -10,7 +10,13 @@ pillow
 
 py -3.10 -m venv venv
 
-.\\venv\\Scripts\\Activate
+.\\.venv\\Scripts\\Activate
+
+cargo-connect123
+
+pkyb knsp atnb rmip 
+
+cargoconnect084@gmail.com
 
 cd Facial-Recognition-Attendance-system
 

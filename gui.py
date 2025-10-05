@@ -161,8 +161,15 @@ class LoginFrame(tk.Frame):
     def attempt_login(self):
         email = self.email_var.get().strip()
         password = self.pwd_var.get()
+        # Basic validation
         if not email or not password:
-            messagebox.showwarning("Missing", "Please enter email and password.")
+            messagebox.showwarning("Missing", "Please enter both email and password.")
+            return
+        if "@" not in email or "." not in email.split("@")[-1]:
+            messagebox.showwarning("Invalid Email", "Please enter a valid email address.")
+            return
+        if len(password) < 5:
+            messagebox.showwarning("Weak Password", "Password must be at least 5 characters long.")
             return
         user = authenticate_admin(email, password, self.app.db_manager)
         if user:
@@ -253,7 +260,7 @@ class DashboardFrame(tk.Frame):
             "student_id": None,
             "school": None,
             "cohort": None,
-            "course": self.add_vars["course"].get().strip(),
+            "course": self.add_vars["course"].get(),  # Dropdown selection, no .strip() needed
             "year_of_study": self.add_vars["year_of_study"].get().strip()
         }
 
@@ -312,7 +319,7 @@ class DashboardFrame(tk.Frame):
         tk.Button(self.nav_frame, text="Add Student", width=20, command=self.show_add_student).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Users", width=20, command=self.show_manage_users).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Lecturers", width=20, command=self.show_manage_lecturers).pack(pady=8)
-        tk.Button(self.nav_frame, text="Manage Cohorts", width=20, command=self.show_manage_cohorts).pack(pady=8)
+        tk.Button(self.nav_frame, text="Manage Classes", width=20, command=self.show_manage_classes).pack(pady=8)
         tk.Button(self.nav_frame, text="Attendance Sessions", width=20, command=lambda: messagebox.showinfo("Info", "Feature coming soon!")).pack(pady=8)
         tk.Button(self.nav_frame, text="Attendance Reports", width=20, command=self.export_reports).pack(pady=8)
         # Admission number input for targeted recognition
@@ -349,17 +356,70 @@ class DashboardFrame(tk.Frame):
         fields = [
             ("First Name", "first_name"),
             ("Last Name", "last_name"),
-            ("Other Names", "other_names"),
+            ("Other Names (optional)", "other_names"),
             ("Email", "email"),
-            ("Phone", "phone"),
+            ("Phone (optional)", "phone"),
             ("Course", "course"),
             ("Year", "year_of_study"),
         ]
         self.add_vars = {}
+        # Tooltip helper
+        def add_tooltip(widget, text):
+            tooltip = tk.Toplevel(widget, bg="#ffffe0", padx=6, pady=2)
+            tooltip.withdraw()
+            tooltip.overrideredirect(True)
+            label = tk.Label(tooltip, text=text, bg="#ffffe0", relief="solid", borderwidth=1, font=("Arial", 9))
+            label.pack()
+            def enter(event):
+                x = widget.winfo_rootx() + widget.winfo_width() + 8
+                y = widget.winfo_rooty()
+                tooltip.geometry(f"+{x}+{y}")
+                tooltip.deiconify()
+            def leave(event):
+                tooltip.withdraw()
+            widget.bind("<Enter>", enter)
+            widget.bind("<Leave>", leave)
+
+        tooltips = {
+            "first_name": "Required. Student's first name.",
+            "last_name": "Required. Student's last name.",
+            "other_names": "Optional. Any other names.",
+            "email": "Required. Must be a valid email address.",
+            "phone": "Optional. Student's phone number.",
+            "course": "Required. Student's course of study.",
+            "year_of_study": "Required. Year of study (e.g., 1, 2, 3, 4)."
+        }
+        course_options = [
+            "Bachelor of Science in Tourism Management (BTM)",
+            "Bachelor of Science in Hospitality Management (BHM)",
+            "Bachelor of Business Science: Financial Engineering (BBSFENG)",
+            "Bachelor of Business Science: Financial Economics (BBSFE)",
+            "Bachelor of Business Science: Actuarial Science (BBSACT)",
+            "Bachelor Of Science In Informatics And Computer Science (BICS)",
+            "Bachelor Of Business Information Technology (BBIT)",
+            "BSc. Computer Networks and Cyber Security (BCNS)",
+            "Bachelor of Laws (LLB)",
+            "Bachelor of Arts in Communication (BAC)",
+            "Bachelor of Arts in International Studies",
+            "Bachelor of Arts in Development Studies and Philosophy (BDP)",
+            "Bachelor of Science in Supply Chain and Operations Management (BSCM)",
+            "Bachelor of Financial Services (BFS)",
+            "Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)",
+            "BSc in Statistics and Data Science (BScSDS)",
+            "Bachelor of Commerce (BCOM)"
+        ]
         for i, (label, key) in enumerate(fields):
-            tk.Label(form, text=label + ":", bg="#ffffff").grid(row=i, column=0, sticky="e", pady=6, padx=6)
+            required = key in ["first_name", "last_name", "email", "course", "year_of_study"]
+            label_widget = tk.Label(form, text=label + ("*" if required else "") + ":", bg="#ffffff")
+            label_widget.grid(row=i, column=0, sticky="e", pady=6, padx=6)
+            add_tooltip(label_widget, tooltips.get(key, ""))
             sv = tk.StringVar()
-            tk.Entry(form, textvariable=sv, width=38).grid(row=i, column=1, pady=6, padx=6)
+            if key == "course":
+                from tkinter import ttk
+                course_combo = ttk.Combobox(form, textvariable=sv, values=course_options, state="readonly", width=36)
+                course_combo.grid(row=i, column=1, pady=6, padx=6)
+            else:
+                tk.Entry(form, textvariable=sv, width=38).grid(row=i, column=1, pady=6, padx=6)
             self.add_vars[key] = sv
 
         btn_frame = tk.Frame(frame, bg="#ffffff")
@@ -1068,64 +1128,65 @@ class DashboardFrame(tk.Frame):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to reset password: {e}")
 
-    # ---------------- Manage Cohorts ----------------
-    def show_manage_cohorts(self):
+    # ---------------- Manage Classes ----------------
+    def show_manage_classes(self):
         self.clear_main()
         frame = tk.Frame(self.main_area, bg="#ffffff", padx=12, pady=12)
         frame.pack(fill="both", expand=True)
         self.current_content = frame
 
-        tk.Label(frame, text="Manage Cohorts", font=("Arial", 16), bg="#ffffff").pack(pady=(0, 8))
+        tk.Label(frame, text="Manage Classes", font=("Arial", 16), bg="#ffffff").pack(pady=(0, 8))
 
         control_frame = tk.Frame(frame, bg="#ffffff")
         control_frame.pack(fill="x", pady=(0, 8))
 
-        tk.Button(control_frame, text="Add Cohort", command=self.add_cohort_dialog).pack(side="left", padx=6)
-        tk.Button(control_frame, text="Edit Selected", command=self.edit_cohort_dialog).pack(side="left", padx=6)
-        tk.Button(control_frame, text="Refresh", command=self.load_cohorts).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Add Class", command=self.add_class_dialog).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Edit Selected", command=self.edit_class_dialog).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Assign Students", command=self.assign_students_to_class_dialog).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Refresh", command=self.load_classes).pack(side="left", padx=6)
 
-        columns = ("cohort_id", "course_id", "year", "semester")
+        columns = ("class_id", "cohort_id", "class_name", "code")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
         col_widths = {
-            "cohort_id": 90,
-            "course_id": 120,
-            "year": 80,
-            "semester": 100
+            "class_id": 90,
+            "cohort_id": 120,
+            "class_name": 160,
+            "code": 100
         }
         for col in columns:
             tree.heading(col, text=col.replace("_", " ").title())
             tree.column(col, width=col_widths.get(col, 100), anchor="center")
         tree.pack(fill="both", expand=True, pady=(8, 8))
-        self.cohorts_tree = tree
+        self.classes_tree = tree
 
-        self.load_cohorts()
+        self.load_classes()
 
-    def load_cohorts(self):
+    def load_classes(self):
         try:
-            for row in self.cohorts_tree.get_children():
-                self.cohorts_tree.delete(row)
+            for row in self.classes_tree.get_children():
+                self.classes_tree.delete(row)
         except Exception:
             pass
 
         try:
-            cohorts = safe_call(self.user_manager, "get_cohorts")
+            classes = safe_call(self.user_manager, "get_classes")
         except AttributeError as e:
             messagebox.showerror("Missing DB Method", str(e))
             return
         except Exception as e:
-            messagebox.showerror("DB Error", f"Failed to fetch cohorts: {e}")
+            messagebox.showerror("DB Error", f"Failed to fetch classes: {e}")
             return
 
-        for c in cohorts:
-            cohort_id = c.get("cohort_id") or c.get("id")
-            course_id = c.get("course_id")
-            year = c.get("year")
-            semester = c.get("semester")
-            self.cohorts_tree.insert("", "end", values=(cohort_id, course_id, year, semester))
+        for c in classes:
+            class_id = c.get("class_id") or c.get("id")
+            cohort_id = c.get("cohort_id")
+            class_name = c.get("class_name")
+            code = c.get("code")
+            self.classes_tree.insert("", "end", values=(class_id, cohort_id, class_name, code))
 
-    def add_cohort_dialog(self):
+    def add_class_dialog(self):
         dlg = tk.Toplevel(self)
-        dlg.title("Add Cohort")
+        dlg.title("Add Class")
         dlg.geometry("340x260")
         dlg.transient(self)
         dlg.grab_set()
@@ -1146,39 +1207,39 @@ class DashboardFrame(tk.Frame):
             vars[key] = sv
 
         def on_save():
-            cohort_data = {k: v.get().strip() for k, v in vars.items()}
-            if not cohort_data["course_id"] or not cohort_data["year"] or not cohort_data["semester"]:
+            class_data = {k: v.get().strip() for k, v in vars.items()}
+            if not class_data["course_id"] or not class_data["year"] or not class_data["semester"]:
                 messagebox.showerror("Validation", "All fields are required.")
                 return
             try:
-                new_id = safe_call(self.user_manager, "create_cohort", cohort_data)
-                messagebox.showinfo("Created", f"Cohort created (id={new_id}).")
+                new_id = safe_call(self.user_manager, "create_class", class_data)
+                messagebox.showinfo("Created", f"Class created (id={new_id}).")
                 dlg.destroy()
-                self.load_cohorts()
+                self.load_classes()
             except AttributeError as e:
                 messagebox.showerror("Missing DB Method", str(e))
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to create cohort: {e}")
+                messagebox.showerror("Error", f"Failed to create class: {e}")
 
         btns = tk.Frame(form)
         btns.grid(row=len(fields), column=0, columnspan=2, pady=12)
         tk.Button(btns, text="Save", command=on_save, width=12).pack(side="left", padx=6)
         tk.Button(btns, text="Cancel", command=dlg.destroy, width=12).pack(side="left", padx=6)
 
-    def edit_cohort_dialog(self):
-        sel = self.cohorts_tree.selection()
+    def edit_class_dialog(self):
+        sel = self.classes_tree.selection()
         if not sel:
-            messagebox.showwarning("No selection", "Please select a cohort to edit.")
+            messagebox.showwarning("No selection", "Please select a class to edit.")
             return
         item = sel[0]
-        vals = self.cohorts_tree.item(item, "values")
-        cohort_id = vals[0]
+        vals = self.classes_tree.item(item, "values")
+        class_id = vals[0]
         course_id = vals[1]
         year = vals[2]
         semester = vals[3]
 
         dlg = tk.Toplevel(self)
-        dlg.title("Edit Cohort")
+        dlg.title("Edit Class")
         dlg.geometry("340x260")
         dlg.transient(self)
         dlg.grab_set()
@@ -1199,19 +1260,19 @@ class DashboardFrame(tk.Frame):
             vars[key] = sv
 
         def on_save():
-            cohort_data = {k: v.get().strip() for k, v in vars.items()}
-            if not cohort_data["course_id"] or not cohort_data["year"] or not cohort_data["semester"]:
+            class_data = {k: v.get().strip() for k, v in vars.items()}
+            if not class_data["course_id"] or not class_data["year"] or not class_data["semester"]:
                 messagebox.showerror("Validation", "All fields are required.")
                 return
             try:
-                safe_call(self.user_manager, "update_cohort", cohort_id, cohort_data)
-                messagebox.showinfo("Saved", "Cohort updated.")
+                safe_call(self.user_manager, "update_class", class_id, class_data)
+                messagebox.showinfo("Saved", "Class updated.")
                 dlg.destroy()
-                self.load_cohorts()
+                self.load_classes()
             except AttributeError as e:
                 messagebox.showerror("Missing DB Method", str(e))
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to update cohort: {e}")
+                messagebox.showerror("Error", f"Failed to update class: {e}")
 
         btns = tk.Frame(form)
         btns.grid(row=len(fields), column=0, columnspan=2, pady=12)

@@ -26,6 +26,7 @@ from typing import Optional, List, Dict, Any, Iterable
 
 import pymysql
 import pymysql.cursors
+from email_utils import send_email
 
 
 # ----------------------
@@ -170,13 +171,53 @@ class UserDataManager:
             with conn.cursor() as cur:
                 cur.execute(q, (class_id,))
                 return [row["student_id"] for row in cur.fetchall()]
-    def get_cohorts_two(self):
-        """Return all cohorts from cohorts_two table."""
-        q = "SELECT * FROM cohorts_two"
+
+    def create_class(self, class_data: Dict[str, Any]) -> int:
+        """
+        Create a new class in the classes_two table.
+        class_data should contain: cohort_id, lecturer_id, class_name, code, description, schedule
+        Returns the new class id.
+        """
+        q = """
+            INSERT INTO classes_two (cohort_id, lecturer_id, class_name, code, description, schedule)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        params = (
+            int(class_data["cohort_id"]),
+            str(class_data["lecturer_id"]),
+            class_data["class_name"],
+            class_data["code"],
+            class_data.get("description", ""),
+            class_data.get("schedule", "")
+        )
         with self.db_manager.get_connection() as conn:
-            with conn.cursor(pymysql.cursors.DictCursor) as cur:
-                cur.execute(q)
-                return cur.fetchall()
+            with conn.cursor() as cur:
+                cur.execute(q, params)
+                conn.commit()
+                return cur.lastrowid
+
+    def update_class(self, class_id: int, class_data: Dict[str, Any]) -> None:
+        """
+        Update an existing class in the classes_two table.
+        class_data should contain: cohort_id, lecturer_id, class_name, code, description, schedule
+        """
+        q = """
+            UPDATE classes_two SET cohort_id=%s, lecturer_id=%s, class_name=%s, code=%s, description=%s, schedule=%s
+            WHERE id=%s
+        """
+        params = (
+            int(class_data["cohort_id"]),
+            str(class_data["lecturer_id"]),
+            class_data["class_name"],
+            class_data["code"],
+            class_data.get("description", ""),
+            class_data.get("schedule", ""),
+            int(class_id)
+        )
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, params)
+                conn.commit()
 
     def get_lecturers_table_two(self):
         """Return all lecturers from lecturers_table_two table."""
@@ -319,6 +360,17 @@ class UserDataManager:
                     )
                 conn.commit()
 
+
+            # Send email notification to the new user
+            try:
+                email = user_dict.get("email")
+                if email:
+                    subject = "Welcome to the Attendance System"
+                    body = f"Hello {user_dict.get('first_name', '')},\n\nYou have been added to the attendance system."
+                    send_email(email, subject, body)
+            except Exception as e:
+                print(f"Failed to send welcome email: {e}")
+
             return s_id
 
         except Exception:
@@ -368,7 +420,7 @@ class UserDataManager:
             raise
 
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        q = "SELECT * FROM users WHERE email=%s LIMIT 1"
+        q = "SELECT * FROM users WHERE email=%s AND active=1 LIMIT 1"
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -381,7 +433,7 @@ class UserDataManager:
         q = """
             SELECT u.id as user_id, u.first_name, u.last_name, u.email, s.student_id, s.school, s.cohort, s.course, s.year_of_study
             FROM users u JOIN students s ON u.id = s.user_id
-            WHERE u.email=%s LIMIT 1
+            WHERE u.email=%s AND u.active=1 LIMIT 1
         """
         try:
             with self.db_manager.get_connection() as conn:
@@ -448,12 +500,24 @@ class UserDataManager:
         Stores a pickled embedding (bytes) into face_embeddings.student_id column.
         embedding can be numpy array, list, etc., it will be pickled.
         """
-        q = "INSERT INTO face_embeddings (student_id, embedding, created_at) VALUES (%s, %s, NOW())"
+        # Only add embedding if user is active
+        check_active_q = """
+            SELECT u.active FROM users u
+            JOIN students s ON u.id = s.user_id
+            WHERE s.student_id = %s
+        """
         try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(check_active_q, (student_id,))
+                    row = cur.fetchone()
+                    if not row or not row.get('active'):
+                        print(f"Embedding not added: student_id {student_id} is not active.")
+                        return
             b = pickle.dumps(embedding)
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(q, (student_id, b))
+                    cur.execute("INSERT INTO face_embeddings (student_id, embedding, created_at) VALUES (%s, %s, NOW())", (student_id, b))
                 conn.commit()
         except Exception:
             raise
@@ -799,7 +863,7 @@ class UserDataManager:
         """
         Return available classes (id, class_name, code, cohort_id) from classes_two
         """
-        q = "SELECT id, cohort_id, class_name, code FROM classes_two ORDER BY class_name ASC"
+        q = "SELECT id, class_name, code, cohort_id FROM classes_two ORDER BY class_name ASC"
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -883,6 +947,33 @@ class UserDataManager:
                 with conn.cursor() as cur:
                     cur.execute(q, (session_id, student_id, confidence))
                 conn.commit()
+
+            # Send email notification to the student
+            try:
+                # Fetch student email, name, and class name
+                with self.db_manager.get_connection() as conn2:
+                    with conn2.cursor() as cur2:
+                        cur2.execute("""
+                            SELECT u.email, u.first_name, c.class_name
+                            FROM users u
+                            JOIN students s ON u.id = s.user_id
+                            JOIN attendance_sessions_two ats ON ats.id = %s
+                            JOIN classes_two c ON ats.class_id = c.id
+                            WHERE s.student_id = %s
+                        """, (session_id, student_id))
+                        row = cur2.fetchone()
+                        if row:
+                            email, first_name, class_name = row
+                            # Skip if email is missing or invalid
+                            if not email or '@' not in email or email.strip().lower() == 'email':
+                                print(f"Skipping attendance email: invalid or missing email for student_id {student_id}")
+                            else:
+                                from email_utils import ATTENDANCE_TEMPLATE
+                                subject = "Attendance Marked"
+                                body = ATTENDANCE_TEMPLATE.format(first_name=first_name, session_id=session_id, class_name=class_name)
+                                send_email(email, subject, body, html=True)
+            except Exception as e:
+                print(f"Failed to send attendance email: {e}")
         except Exception:
             raise
 
