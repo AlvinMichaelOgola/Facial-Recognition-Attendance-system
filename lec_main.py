@@ -180,14 +180,15 @@ class LecturerApp(tb.Window):
             messagebox.showerror("Error", "Failed to start session (DB returned no id).")
             return
 
-        # NEW: Get student IDs for this class
+        # Get only eligible students (assigned to class and active)
         try:
-            student_ids = self.db.get_student_ids_for_class(class_id)
+            embeddings = self.db.get_face_embeddings_for_class(class_id)
+            student_ids = [row['student_id'] for row in embeddings]
             if not student_ids:
-                messagebox.showwarning("No Students", "No students are assigned to this class. Attendance cannot be started.")
+                messagebox.showwarning("No Students", "No eligible students (assigned and active) are in this class. Attendance cannot be started.")
                 return
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to fetch students for class: {e}")
+            messagebox.showerror("Error", f"Failed to fetch eligible students for class: {e}")
             return
 
         # Start rec_faces session with filtered student IDs

@@ -1,3 +1,113 @@
+try:
+    from tkcalendar import DateEntry
+except ImportError:
+    DateEntry = None  # Will show error if not installed
+
+import tkinter as tk
+from tkinter import ttk
+
+# ...existing code...
+
+# Place AddClassDialog after tkinter import
+
+class AddClassDialog(tk.Toplevel):
+    def __init__(self, parent, on_save=None):
+        super().__init__(parent)
+        self.title("Add Class / Session")
+        self.resizable(False, False)
+        self.on_save = on_save
+        self.grab_set()
+
+        fields = [
+            ("Class Name", "class_name"),
+            ("Date (YYYY-MM-DD)", "date"),
+            ("Start Time (e.g. 09:00 AM)", "start_time"),
+            ("End Time (e.g. 11:00 AM)", "end_time"),
+            ("Room", "room"),
+            ("Lecturer Name", "lecturer"),
+        ]
+        self.vars = {}
+        for i, (label, key) in enumerate(fields):
+            tk.Label(self, text=label+":").grid(row=i, column=0, sticky="e", padx=8, pady=4)
+            sv = tk.StringVar()
+            tk.Entry(self, textvariable=sv, width=32).grid(row=i, column=1, padx=8, pady=4)
+            self.vars[key] = sv
+
+        btn_frame = tk.Frame(self)
+        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=10)
+        tk.Button(btn_frame, text="Save", command=self.save).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=6)
+
+    def save(self):
+        data = {k: v.get().strip() for k, v in self.vars.items()}
+        # Basic validation
+        if not data["class_name"] or not data["date"] or not data["start_time"] or not data["end_time"] or not data["room"] or not data["lecturer"]:
+            tk.messagebox.showerror("Validation", "All fields are required.")
+            return
+        if self.on_save:
+            self.on_save(data)
+        tk.messagebox.showinfo("Success", "Class details saved (DB integration needed).")
+        self.destroy()
+import tkinter as tk
+from tkinter import ttk
+
+class EditUserDialog(tk.Toplevel):
+    def __init__(self, parent, user, user_manager, on_saved=None):
+        super().__init__(parent)
+        self.title("Edit User")
+        self.user_manager = user_manager
+        self.on_saved = on_saved
+        self.user = user
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        # Fields to edit
+        fields = [
+            ("First Name", "first_name"),
+            ("Last Name", "last_name"),
+            ("Email", "email"),
+            ("Phone", "phone"),
+            ("School", "school"),
+            ("Cohort", "cohort"),
+            ("Course", "course"),
+            ("Year of Study", "year_of_study"),
+        ]
+        self.vars = {}
+        for i, (label, key) in enumerate(fields):
+            tk.Label(self, text=label+":").grid(row=i, column=0, sticky="e", padx=8, pady=4)
+            sv = tk.StringVar(value=user.get(key, ""))
+            tk.Entry(self, textvariable=sv, width=32).grid(row=i, column=1, padx=8, pady=4)
+            self.vars[key] = sv
+
+        btn_frame = tk.Frame(self)
+        btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=10)
+        tk.Button(btn_frame, text="Save", command=self.save).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=6)
+
+    def save(self):
+        # Prepare update dicts
+        user_updates = {
+            "first_name": self.vars["first_name"].get().strip(),
+            "last_name": self.vars["last_name"].get().strip(),
+            "email": self.vars["email"].get().strip(),
+            "phone": self.vars["phone"].get().strip(),
+        }
+        student_updates = {
+            "school": self.vars["school"].get().strip(),
+            "cohort": self.vars["cohort"].get().strip(),
+            "course": self.vars["course"].get().strip(),
+            "year_of_study": self.vars["year_of_study"].get().strip(),
+        }
+        student_id = self.user.get("student_id")
+        try:
+            self.user_manager.update_user(student_id, user_updates, student_updates)
+            if self.on_saved:
+                self.on_saved()
+            tk.messagebox.showinfo("Success", "User updated successfully.")
+            self.destroy()
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"Failed to update user: {e}")
 # gui.py
 """
 Tkinter-based GUI for Facial Recognition Attendance System (MVP)
@@ -235,6 +345,22 @@ class LoginFrame(tk.Frame):
 # Dashboard Frame (full)
 # -------------------------
 class DashboardFrame(tk.Frame):
+    def show_manage_classes(self):
+        self.clear_main()
+        frame = tk.Frame(self.main_area, bg="#ffffff", padx=16, pady=16)
+        frame.pack(fill="both", expand=True)
+        self.current_content = frame
+
+        tk.Label(frame, text="Manage Classes / Sessions", font=("Arial", 16), bg="#ffffff").pack(pady=(0, 12))
+        tk.Button(frame, text="Add Class / Session", command=self.open_add_class_dialog).pack(pady=8)
+        # Placeholder for class/session list
+        tk.Label(frame, text="(Class/session list will appear here)", bg="#ffffff", fg="#888").pack(pady=12)
+
+    def open_add_class_dialog(self):
+        def on_save(data):
+            # TODO: Save to DB via user_manager/db_manager
+            print("Class details:", data)
+        AddClassDialog(self, on_save=on_save)
     def register_student(self):
         # Validate
         first = self.add_vars["first_name"].get().strip()
@@ -810,12 +936,14 @@ class DashboardFrame(tk.Frame):
         cohort_choices = [(str(c.get("id")), f"{c.get('id')} (Course: {c.get('course_id')}, Year: {c.get('year')}, Sem: {c.get('semester')})") for c in cohorts]
 
         fields = [
-            ("Cohort", "cohort_id"),
             ("Lecturer", "lecturer_id"),
             ("Class Name", "class_name"),
             ("Code", "code"),
             ("Description", "description"),
-            ("Schedule", "schedule"),
+            ("Date (YYYY-MM-DD)", "date"),
+            ("Start Time", "start_time"),
+            ("End Time", "end_time"),
+            ("Room", "room"),
         ]
         # Fetch real lecturers from lecturers_table_two for dropdown
         try:
@@ -837,24 +965,37 @@ class DashboardFrame(tk.Frame):
         vars = {}
         form = tk.Frame(dlg)
         form.pack(pady=16, padx=16)
+        time_options = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)]  # 07:00 to 21:30
         for i, (label, key) in enumerate(fields):
             tk.Label(form, text=label+":").grid(row=i, column=0, sticky="e", pady=6, padx=6)
-            if key == "cohort_id":
-                sv = tk.StringVar()
-                cb = ttk.Combobox(form, textvariable=sv, width=26, state="readonly")
-                cb['values'] = [desc for cid, desc in cohort_choices]
-                cb.grid(row=i, column=1, pady=6, padx=6)
-                vars[key] = (sv, cohort_choices)
-            elif key == "lecturer_id":
+            if key == "lecturer_id":
                 sv = tk.StringVar()
                 cb = ttk.Combobox(form, textvariable=sv, width=26, state="readonly")
                 cb['values'] = [desc for lid, desc in lecturer_choices]
                 cb.grid(row=i, column=1, pady=6, padx=6)
                 vars[key] = (sv, lecturer_choices)
+            elif key == "date":
+                if DateEntry is None:
+                    tk.Label(form, text="Install tkcalendar for date picker").grid(row=i, column=1, pady=6, padx=6)
+                    sv = tk.StringVar()
+                    vars[key] = sv
+                else:
+                    sv = tk.StringVar()
+                    date_entry = DateEntry(form, textvariable=sv, width=25, date_pattern="yyyy-mm-dd")
+                    date_entry.grid(row=i, column=1, pady=6, padx=6)
+                    vars[key] = sv
+            elif key in ("start_time", "end_time"):
+                sv = tk.StringVar()
+                cb = ttk.Combobox(form, textvariable=sv, width=26, state="readonly")
+                cb['values'] = time_options
+                cb.grid(row=i, column=1, pady=6, padx=6)
+                vars[key] = sv
             else:
                 sv = tk.StringVar()
                 tk.Entry(form, textvariable=sv, width=28).grid(row=i, column=1, pady=6, padx=6)
                 vars[key] = sv
+# NOTE: For date picker support, install tkcalendar:
+#   pip install tkcalendar
 
         def on_save():
             class_data = {}
@@ -880,14 +1021,15 @@ class DashboardFrame(tk.Frame):
                     class_data[k] = lecturer_id
                 else:
                     class_data[k] = v.get().strip()
+            # Validation for new fields
             if not class_data["class_name"] or not class_data["code"]:
                 messagebox.showerror("Validation", "Class Name and Code are required.")
                 return
-            if not class_data["cohort_id"]:
-                messagebox.showerror("Validation", "Cohort selection is required.")
-                return
             if not class_data["lecturer_id"]:
                 messagebox.showerror("Validation", "Lecturer selection is required.")
+                return
+            if not class_data["date"] or not class_data["start_time"] or not class_data["end_time"] or not class_data["room"]:
+                messagebox.showerror("Validation", "Date, Start Time, End Time, and Room are required.")
                 return
             try:
                 class_id = safe_call(self.user_manager, "create_class", class_data)
@@ -944,13 +1086,20 @@ class DashboardFrame(tk.Frame):
             active_flag = l.get("active") if "active" in l else l.get("is_active", 1)
             active_text = "Active" if str(active_flag) == "1" else "Inactive"
 
-            # classes: try to obtain via user_manager.get_lecturer_classes(user_id)
+            # classes: robustly obtain and display class names
             classes_text = ""
             try:
-                classes = safe_call(self.user_manager, "get_lecturer_classes", user_id)
-                if classes:
-                    if isinstance(classes, (list, tuple)):
-                        classes_text = ", ".join([str(c.get("class_name") if isinstance(c, dict) else (c.get("name") if isinstance(c, dict) else str(c))) for c in classes])
+                classes = safe_call(self.user_manager, "get_lecturer_classes", lecturer_id)
+                if classes and isinstance(classes, (list, tuple)):
+                    class_names = []
+                    for c in classes:
+                        if isinstance(c, dict):
+                            name = c.get("class_name") or c.get("name") or c.get("code") or c.get("id")
+                            if name:
+                                class_names.append(str(name))
+                        else:
+                            class_names.append(str(c))
+                    classes_text = ", ".join(class_names)
             except Exception:
                 classes_text = ""
 
@@ -976,27 +1125,16 @@ class DashboardFrame(tk.Frame):
             return
         item = sel[0]
         vals = self.lecturers_tree.item(item, "values")
-        user_id = vals[0]
+        lecturer_id = vals[1]  # Assuming the second column is lecturer_id (L001, etc.)
         try:
-            lecturer = safe_call(self.user_manager, "get_user_by_id") if hasattr(self.user_manager, "get_user_by_id") else None
-            if lecturer:
-                user = safe_call(self.user_manager, "get_user_by_id", user_id)
-            else:
-                # fallback to get_lecturers -> find the one we need
-                lecturers = safe_call(self.user_manager, "get_lecturers")
-                user = next((x for x in lecturers if str(x.get("user_id") or x.get("id") or "") == str(user_id)), None)
-        except AttributeError as e:
-            messagebox.showerror("Missing DB Method", str(e))
-            return
+            lecturer = self.user_manager.get_lecturer_by_lecturer_id(lecturer_id)
         except Exception as e:
             messagebox.showerror("DB Error", f"Failed to fetch lecturer details: {e}")
             return
-
-        if not user:
+        if not lecturer:
             messagebox.showerror("Error", "Lecturer not found.")
             return
-
-        dlg = LecturerDialog(self, user, self.user_manager, on_saved=lambda: self.load_lecturers(limit=20))
+        dlg = LecturerDialog(self, lecturer, self.user_manager, on_saved=lambda: self.load_lecturers(limit=20))
         dlg.grab_set()
 
     def toggle_lecturer_active(self):
@@ -1341,6 +1479,26 @@ class LecturerDialog(tk.Toplevel):
             ("Office Location", "office_location"),
             ("Specialization", "specialization")
         ]
+
+        department_options = [
+            "Bachelor of Science in Tourism Management (BTM)",
+            "Bachelor of Science in Hospitality Management (BHM)",
+            "Bachelor of Business Science: Financial Engineering (BBSFENG)",
+            "Bachelor of Business Science: Financial Economics (BBSFE)",
+            "Bachelor of Business Science: Actuarial Science (BBSACT)",
+            "Bachelor Of Science In Informatics And Computer Science (BICS)",
+            "Bachelor Of Business Information Technology (BBIT)",
+            "BSc. Computer Networks and Cyber Security (BCNS)",
+            "Bachelor of Laws (LLB)",
+            "Bachelor of Arts in Communication (BAC)",
+            "Bachelor of Arts in International Studies",
+            "Bachelor of Arts in Development Studies and Philosophy (BDP)",
+            "Bachelor of Science in Supply Chain and Operations Management (BSCM)",
+            "Bachelor of Financial Services (BFS)",
+            "Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)",
+            "BSc in Statistics and Data Science (BScSDS)",
+            "Bachelor of Commerce (BCOM)"
+        ]
         self.vars = {}
         for i, (label, key) in enumerate(fields):
             tk.Label(frame, text=label + ":", anchor="w").grid(row=i, column=0, sticky="w", pady=6)
@@ -1353,6 +1511,12 @@ class LecturerDialog(tk.Toplevel):
                 sv = tk.StringVar(value=initial)
                 cb = ttk.Combobox(frame, textvariable=sv, width=34, state="readonly")
                 cb['values'] = ("Lecturer", "Graduate Assistant")
+                cb.grid(row=i, column=1, pady=6)
+                self.vars[key] = sv
+            elif key == "department":
+                sv = tk.StringVar(value=initial)
+                cb = ttk.Combobox(frame, textvariable=sv, width=34, state="readonly")
+                cb['values'] = department_options
                 cb.grid(row=i, column=1, pady=6)
                 self.vars[key] = sv
             elif key == "password":
@@ -1384,19 +1548,60 @@ class LecturerDialog(tk.Toplevel):
         tk.Button(btn_frame, text="Cancel", command=self.destroy, width=12).pack(side="left", padx=6)
 
     def save(self):
-        # Collect all fields
+        import re
+        from tkinter import messagebox
         lecturer_data = {k: self.vars[k].get().strip() for k in [
             "first_name", "last_name", "other_name", "email", "phone", "password", "department", "academic_rank", "hire_date", "office_location", "specialization"]}
 
-        # Validation: require first_name, last_name, email, password, phone
-        if not lecturer_data["first_name"] or not lecturer_data["last_name"] or not lecturer_data["email"] or not lecturer_data["password"] or not lecturer_data["phone"]:
-            messagebox.showerror("Validation", "First name, last name, email, phone, and password are required.")
+        # Required fields
+        required_fields = ["first_name", "last_name", "email", "phone", "password", "department", "academic_rank", "office_location", "specialization"]
+        missing = [f.replace('_', ' ').title() for f in required_fields if not lecturer_data[f]]
+        if missing:
+            messagebox.showerror("Validation", f"Missing required fields: {', '.join(missing)}")
             return
+
+        # Email format
+        email_regex = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        if not re.match(email_regex, lecturer_data["email"]):
+            messagebox.showerror("Validation", "Invalid email format.")
+            return
+
+        # Phone format (allow +, digits, spaces, dashes, min 7 digits)
+        phone_clean = re.sub(r"[^\d]", "", lecturer_data["phone"])
+        if len(phone_clean) < 7:
+            messagebox.showerror("Validation", "Phone number must have at least 7 digits.")
+            return
+
+        # Password length
+        if len(lecturer_data["password"]) < 6:
+            messagebox.showerror("Validation", "Password must be at least 6 characters.")
+            return
+
+        # Hire date format (if provided)
+        hire_date = lecturer_data["hire_date"]
+        if hire_date:
+            date_regex = r"^\d{4}-\d{2}-\d{2}$"
+            if not re.match(date_regex, hire_date):
+                messagebox.showerror("Validation", "Hire date must be in YYYY-MM-DD format.")
+                return
+
+        # Optionally: check for duplicate email (only on create)
+        if not self.lecturer:
+            try:
+                existing = self.user_manager.get_lecturer_by_lecturer_id(lecturer_data["email"])
+                if existing:
+                    messagebox.showerror("Validation", "A lecturer with this email already exists.")
+                    return
+            except Exception:
+                pass
 
         try:
             if self.lecturer:
-                lecturer_table_id = self.lecturer.get("lecturer_table_id") or self.lecturer.get("id")
-                safe_call(self.user_manager, "update_lecturer", lecturer_table_id, lecturer_data)
+                lecturer_id = self.lecturer.get("lecturer_id")
+                if not lecturer_id:
+                    messagebox.showerror("Error", "Lecturer ID not found. Cannot update record.")
+                    return
+                safe_call(self.user_manager, "update_lecturer", lecturer_id, lecturer_data)
                 messagebox.showinfo("Saved", "Lecturer updated.")
             else:
                 new_id = safe_call(self.user_manager, "create_lecturer", lecturer_data)
