@@ -8,3 +8,6 @@ for the capture face in manage users, ensure it soft deletes the old embeddings 
 
 i need to fix the live view and make sure that the attendance is working
 another approach can be when the lecturer hits export attendance, it sends the csv to their email directly.
+
+
+add search for the dropdowns

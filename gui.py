@@ -923,7 +923,7 @@ class DashboardFrame(tk.Frame):
 
     def create_class_dialog(self):
         dlg = tk.Toplevel(self)
-        dlg.title("Create New Class")
+        dlg.title("Add New Class")
         dlg.geometry("400x420")
         dlg.transient(self)
         dlg.grab_set()

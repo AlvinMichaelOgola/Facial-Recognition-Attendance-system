@@ -60,3 +60,5 @@ Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)
 BSc in Statistics and Data Science (BScSDS)
 
 Bachelor of Commerce (BCOM)
+
+npm run dev
