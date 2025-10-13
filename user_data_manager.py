@@ -33,6 +33,28 @@ from email_utils import send_email
 # Database connection
 # ----------------------
 class DatabaseManager:
+    def get_attendance_records_for_student(self, student_id: str) -> list:
+        """
+        Return all attendance records for a student as a list of dicts.
+        Each dict contains: date, class, session, status, confidence, lecturer, etc.
+        """
+        q = '''
+            SELECT ar.session_id, ar.present_at, ar.confidence, c.class_name, ats.name AS session_name, ats.started_at, ats.ended_at, l.first_name AS lecturer_first_name, l.last_name AS lecturer_last_name
+            FROM attendance_records_two ar
+            LEFT JOIN attendance_sessions_two ats ON ar.session_id = ats.id
+            LEFT JOIN classes_two c ON ats.class_id = c.id
+            LEFT JOIN lecturers_table_two l ON ats.lecturer_id = l.lecturer_id
+            WHERE ar.student_id = %s
+            ORDER BY ar.present_at DESC
+        '''
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id,))
+                    return cur.fetchall()
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch attendance records for student {student_id}: {e}")
+            return []
     def __init__(
         self,
         host: str = "localhost",
@@ -88,6 +110,121 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+    def download_attendance_csv(self, student_id: str, file_path: str) -> None:
+        """
+        Export all attendance records for a student as a CSV file.
+        :param student_id: The student's unique ID
+        :param file_path: The path to save the CSV file
+        """
+        import csv
+        q = '''
+            SELECT ar.session_id, ar.present_at, ar.confidence, c.class_name, ats.name AS session_name, ats.started_at, ats.ended_at, l.first_name AS lecturer_first_name, l.last_name AS lecturer_last_name
+            FROM attendance_records_two ar
+            LEFT JOIN attendance_sessions_two ats ON ar.session_id = ats.id
+            LEFT JOIN classes_two c ON ats.class_id = c.id
+            LEFT JOIN lecturers_table_two l ON ats.lecturer_id = l.lecturer_id
+            WHERE ar.student_id = %s
+            ORDER BY ar.present_at DESC
+        '''
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id,))
+                    records = cur.fetchall()
+            fieldnames = [
+                'session_id', 'session_name', 'class_name', 'lecturer_first_name', 'lecturer_last_name',
+                'present_at', 'confidence', 'started_at', 'ended_at'
+            ]
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in records:
+                    writer.writerow(row)
+        except Exception as e:
+            print(f"[ERROR] Failed to export attendance CSV for student {student_id}: {e}")
+    def get_face_embeddings_for_class(self, class_id: int) -> List[Dict[str, Any]]:
+        """
+        Returns all face embeddings for students assigned to the given class_id and who are active.
+        Each row is a dict with keys: 'student_id', 'embedding'.
+        """
+        q = '''
+            SELECT fe.student_id, fe.embedding
+            FROM face_embeddings fe
+            JOIN students s ON fe.student_id = s.student_id
+            JOIN users u ON s.user_id = u.id
+            JOIN class_students_two cs ON s.student_id = cs.student_id
+            WHERE cs.class_id = %s AND u.active = 1
+            ORDER BY fe.student_id ASC, fe.created_at DESC
+        '''
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (class_id,))
+                    rows = cur.fetchall()
+                    # Unpickle embeddings
+                    for r in rows:
+                        if r.get('embedding'):
+                            try:
+                                r['embedding'] = pickle.loads(r['embedding'])
+                            except Exception:
+                                pass
+                    return rows
+        except Exception:
+            raise
+    def admin_login(self, admin_id: int, details: dict = None):
+        """
+        Log an admin login event to the audit log.
+        :param admin_id: The admin's user ID
+        :param details: Optional dictionary with context (e.g., IP address, device info)
+        """
+        self.log_admin_action(admin_id, "admin_login", details or {})
+
+    def admin_logout(self, admin_id: int, details: dict = None):
+        """
+        Log an admin logout event to the audit log.
+        :param admin_id: The admin's user ID
+        :param details: Optional dictionary with context (e.g., IP address, device info)
+        """
+        self.log_admin_action(admin_id, "admin_logout", details or {})
+
+    def log_admin_action(self, admin_id: int, action: str, details: dict):
+        """
+        Log an admin action to the admin_audit_log table.
+        :param admin_id: The admin's user ID
+        :param action: Short string describing the action (e.g., 'create_user')
+        :param details: Dictionary with context (will be stored as JSON)
+        """
+        import json
+        print(f"[DEBUG] log_admin_action called with admin_id={admin_id}, action={action}, details={details}")
+        q = """
+            INSERT INTO admin_audit_log (admin_id, action, details, created_at)
+            VALUES (%s, %s, %s, NOW())
+        """
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (admin_id, action, json.dumps(details)))
+                    print(f"[DEBUG] log_admin_action: Inserted row, rowcount={cur.rowcount}")
+                conn.commit()
+                print(f"[DEBUG] log_admin_action: Commit successful.")
+        except Exception as e:
+            print(f"[AUDIT LOG ERROR] Failed to log admin action: {e}")
+
+    # Example usage (call this in your admin actions):
+    # self.log_admin_action(admin_id, 'create_user', {'user_id': new_user_id, 'email': email})
+    def get_lecturer_by_lecturer_id(self, lecturer_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a single lecturer by their lecturer_id (string, e.g., 'L001') from lecturers_table_two.
+        Returns a dict with lecturer info if found, else None.
+        """
+        q = "SELECT * FROM lecturers_table_two WHERE lecturer_id = %s LIMIT 1"
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor(pymysql.cursors.DictCursor) as cur:
+                    cur.execute(q, (lecturer_id,))
+                    return cur.fetchone()
+        except Exception:
+            raise
 
     def get_attendance_for_session(self, session_id: int) -> list:
         """
@@ -362,12 +499,32 @@ class UserDataManager:
 
 
             # Send email notification to the new user
+            import random
+            import string
             try:
                 email = user_dict.get("email")
                 if email:
+                    # Generate a random password
+                    password_plain = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+                    user_updates = {}
+                    # Hash and set the password in the DB
+                    user_updates['password'] = hash_password(password_plain)
+                    # Update the user with the new password
+                    set_clause = ", ".join([f"{k}=%s" for k in user_updates.keys()])
+                    params = tuple(user_updates.values()) + (user_id,)
+                    q = f"UPDATE users SET {set_clause} WHERE id=%s"
+                    with self.db_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(q, params)
+                        conn.commit()
+                    from email_utils import WELCOME_TEMPLATE
                     subject = "Welcome to the Attendance System"
-                    body = f"Hello {user_dict.get('first_name', '')},\n\nYou have been added to the attendance system."
-                    send_email(email, subject, body)
+                    body = WELCOME_TEMPLATE.format(
+                        first_name=user_dict.get('first_name', ''),
+                    ) + f"<p><b>Your login email:</b> {email}<br>"
+                    body += f"<b>Your temporary password:</b> {password_plain}</p>"
+                    body += "<p>Please log in and change your password after your first login.</p>"
+                    send_email(email, subject, body, html=True)
             except Exception as e:
                 print(f"Failed to send welcome email: {e}")
 
@@ -623,7 +780,7 @@ class UserDataManager:
             return None
         return None
 
-    def create_lecturer(self, lecturer_data: Dict[str, Any]) -> int:
+    def create_lecturer(self, lecturer_data: Dict[str, Any], admin_id: int = None) -> int:
         """
         Create a lecturer in the lecturers table only (stand-alone).
         Auto-generates lecturer_id (L001, L002...).
@@ -679,6 +836,9 @@ class UserDataManager:
                     )
                     lecturer_row_id = cur.lastrowid
                 conn.commit()
+            return lecturer_id_val
+            if admin_id is not None:
+                self.log_admin_action(admin_id, "create_lecturer", {"lecturer_id": lecturer_id_val, **lecturer_data})
             return lecturer_id_val
         except Exception:
             raise
@@ -741,38 +901,30 @@ class UserDataManager:
         except Exception:
             raise
 
-    def update_lecturer(self, lecturer_pk: int, lecturer_updates: Dict[str, Any], user_updates: Dict[str, Any]) -> None:
+    def update_lecturer(self, lecturer_pk: int, lecturer_updates: Dict[str, Any], admin_id: int = None) -> None:
         """
-        Update lecturers and users tables for the given lecturer_pk (lecturers PK).
-        lecturer_updates: columns for lecturers table
-        user_updates: columns for users table
+        Update lecturers_table_two for the given lecturer_pk (lecturers PK).
+        lecturer_updates: columns for lecturers_table_two table
         """
         try:
+            print(f"[DEBUG] update_lecturer called with lecturer_id={lecturer_pk}")
+            print(f"[DEBUG] lecturer_updates: {lecturer_updates}")
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     if lecturer_updates:
                         set_clause = ", ".join([f"{k}=%s" for k in lecturer_updates.keys()])
                         params = tuple(lecturer_updates.values()) + (lecturer_pk,)
-                        q = f"UPDATE lecturers SET {set_clause} WHERE id=%s"
+                        q = f"UPDATE lecturers_table_two SET {set_clause} WHERE lecturer_id=%s"
+                        print(f"[DEBUG] Executing SQL: {q} with params {params}")
                         cur.execute(q, params)
-
-                    if user_updates:
-                        # Get user_id for this lecturer
-                        cur.execute("SELECT user_id FROM lecturers WHERE id=%s", (lecturer_pk,))
-                        row = cur.fetchone()
-                        if row:
-                            user_id = row["user_id"]
-                            if "password" in user_updates and user_updates["password"]:
-                                user_updates["password"] = hash_password(user_updates["password"])
-                            set_clause2 = ", ".join([f"{k}=%s" for k in user_updates.keys()])
-                            params2 = tuple(user_updates.values()) + (user_id,)
-                            q2 = f"UPDATE users SET {set_clause2} WHERE id=%s"
-                            cur.execute(q2, params2)
                 conn.commit()
-        except Exception:
+            if admin_id is not None:
+                self.log_admin_action(admin_id, "update_lecturer", {"lecturer_id": lecturer_pk, **lecturer_updates})
+        except Exception as e:
+            print(f"[DEBUG] Exception in update_lecturer: {e}")
             raise
 
-    def delete_lecturer(self, lecturer_pk: int, delete_user: bool = False) -> None:
+    def delete_lecturer(self, lecturer_pk: int, delete_user: bool = False, admin_id: int = None) -> None:
         """
         Delete a lecturer from the lecturers table. Optionally deletes the related users row.
         """
@@ -791,10 +943,12 @@ class UserDataManager:
                     # delete lecturer row
                     cur.execute("DELETE FROM lecturers WHERE id=%s", (lecturer_pk,))
                 conn.commit()
+            if admin_id is not None:
+                self.log_admin_action(admin_id, "delete_lecturer", {"lecturer_id": lecturer_pk, "delete_user": delete_user})
         except Exception:
             raise
 
-    def toggle_lecturer_active(self, lecturer_identifier: Any) -> None:
+    def toggle_lecturer_active(self, lecturer_identifier: Any, admin_id: int = None) -> None:
         """
         Toggle active flag on the users table for the lecturer referenced by lecturer_identifier (lecturers.id or users.id).
         """
@@ -808,6 +962,8 @@ class UserDataManager:
                         with conn.cursor() as cur:
                             cur.execute("UPDATE users SET active = IF(active=1, 0, 1) WHERE id=%s", (uid,))
                         conn.commit()
+                    if admin_id is not None:
+                        self.log_admin_action(admin_id, "toggle_lecturer_active", {"user_id": uid})
                     return
                 except Exception:
                     raise ValueError("Lecturer not found to toggle active.")
@@ -822,10 +978,12 @@ class UserDataManager:
                     user_id = r["user_id"]
                     cur.execute("UPDATE users SET active = IF(active=1, 0, 1) WHERE id=%s", (user_id,))
                 conn.commit()
+            if admin_id is not None:
+                self.log_admin_action(admin_id, "toggle_lecturer_active", {"lecturer_pk": lecturer_pk})
         except Exception:
             raise
 
-    def reset_lecturer_password(self, lecturer_identifier: Any, new_password: str) -> None:
+    def reset_lecturer_password(self, lecturer_identifier: Any, new_password: str, admin_id: int = None) -> None:
         """
         Reset the lecturer's password (hashing applied).
         lecturer_identifier can be lecturers.id or users.id.
@@ -844,6 +1002,8 @@ class UserDataManager:
                         user_id = r["user_id"]
                         cur.execute("UPDATE users SET password=%s WHERE id=%s", (hashed, user_id))
                     conn.commit()
+                if admin_id is not None:
+                    self.log_admin_action(admin_id, "reset_lecturer_password", {"lecturer_pk": lecturer_pk, "user_id": user_id})
                 return
             # fallback: if numeric treat as users.id
             try:
@@ -852,6 +1012,8 @@ class UserDataManager:
                     with conn.cursor() as cur:
                         cur.execute("UPDATE users SET password=%s WHERE id=%s", (hashed, uid))
                     conn.commit()
+                if admin_id is not None:
+                    self.log_admin_action(admin_id, "reset_lecturer_password", {"user_id": uid})
                 return
             except Exception:
                 raise ValueError("Could not resolve lecturer identifier for password reset.")
@@ -872,7 +1034,7 @@ class UserDataManager:
         except Exception:
             raise
 
-    def assign_lecturer_to_class(self, lecturer_identifier: Any, class_id: int) -> None:
+    def assign_lecturer_to_class(self, lecturer_identifier: Any, class_id: int, admin_id: int = None) -> None:
         """
         Inserts a mapping between lecturer (lecturers.id or users.id) and class.
         """
@@ -886,10 +1048,12 @@ class UserDataManager:
                 with conn.cursor() as cur:
                     cur.execute(q, (lecturer_id_str, class_id, assigned_by))
                 conn.commit()
+            if admin_id is not None:
+                self.log_admin_action(admin_id, "assign_lecturer_to_class", {"lecturer_id": lecturer_id_str, "class_id": class_id})
         except Exception:
             raise
 
-    def assign_lecturer_to_classes(self, lecturer_identifier: Any, class_ids: Iterable[Any]) -> None:
+    def assign_lecturer_to_classes(self, lecturer_identifier: Any, class_ids: Iterable[Any], admin_id: int = None) -> None:
         """
         Bulk assign classes to a lecturer. Replaces existing assignments.
         lecturer_identifier: lecturers.id or users.id or lecturer_id string like 'L001'.
@@ -910,6 +1074,8 @@ class UserDataManager:
                         for cid in cids:
                             cur.execute(ins_q, (lecturer_id, cid))
                 conn.commit()
+            if admin_id is not None:
+                self.log_admin_action(admin_id, "assign_lecturer_to_classes", {"lecturer_id": lecturer_id, "class_ids": cids})
         except Exception:
             raise
 
@@ -920,6 +1086,7 @@ class UserDataManager:
         """
         try:
             lecturer_id = str(lecturer_identifier)
+            print(f"[DEBUG] Fetching classes for lecturer_id: {lecturer_id}")
             q = """
                 SELECT id, cohort_id, class_name, code
                 FROM classes_two
@@ -929,8 +1096,11 @@ class UserDataManager:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(q, (lecturer_id,))
-                    return cur.fetchall()
-        except Exception:
+                    results = cur.fetchall()
+                    print(f"[DEBUG] Classes fetched: {results}")
+                    return results
+        except Exception as e:
+            print(f"[DEBUG] Exception in get_lecturer_classes: {e}")
             raise
 
 
@@ -947,7 +1117,6 @@ class UserDataManager:
                 with conn.cursor() as cur:
                     cur.execute(q, (session_id, student_id, confidence))
                 conn.commit()
-
             # Send email notification to the student
             try:
                 # Fetch student email, name, and class name
