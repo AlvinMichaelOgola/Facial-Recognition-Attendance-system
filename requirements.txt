@@ -7,10 +7,12 @@ tf-keras
 numpy
 pillow
 
-
+/*Things to do to run the project*/
 py -3.10 -m venv venv
 
 .\\.venv\\Scripts\\Activate
+
+npm run dev
 
 cargo-connect123
 
@@ -61,4 +63,4 @@ BSc in Statistics and Data Science (BScSDS)
 
 Bachelor of Commerce (BCOM)
 
-npm run dev
+

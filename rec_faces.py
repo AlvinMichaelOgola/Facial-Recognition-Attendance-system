@@ -47,7 +47,7 @@ def flush_attendance():
     try:
         records = db_manager.get_attendance_for_session(current_session_id)
         fieldnames = [
-            'student_id', 'first_name', 'last_name', 'course', 'present_at', 'confidence'
+            'student_id', 'first_name', 'last_name', 'course', 'present_at', 'confidence', 'status'
         ]
         # Fetch session and class info for filename
         session_info = db_manager.get_session_by_id(current_session_id)
@@ -73,23 +73,44 @@ def flush_attendance():
         class_name_safe = sanitize(class_name).replace(' ', '_')
         lecturer_name_safe = sanitize(lecturer_name).replace(' ', '_')
         session_csv = os.path.join('data', f'attendance_{date_str}_{lecturer_name_safe}_{class_name_safe}_{current_session_id}.csv')
+
+        # Get all students assigned to this class
+        all_students = db_manager.get_students_for_class(class_info['id']) if class_info and class_info.get('id') else []
+        # Map attendance records by student_id
+        attendance_map = {rec.get('student_id'): rec for rec in records}
+
         with open(session_csv, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            if records and len(records) > 0:
-                for rec in records:
-                    writer.writerow({
-                        'student_id': rec.get('student_id'),
-                        'first_name': rec.get('first_name'),
-                        'last_name': rec.get('last_name'),
-                        'course': rec.get('course'),
-                        'present_at': rec.get('present_at'),
-                        'confidence': rec.get('confidence'),
-                    })
+            if all_students:
+                for student in all_students:
+                    rec = attendance_map.get(student['student_id'])
+                    if rec:
+                        status = 'Present' if rec.get('present_at') else 'Absent'
+                        writer.writerow({
+                            'student_id': rec.get('student_id'),
+                            'first_name': rec.get('first_name'),
+                            'last_name': rec.get('last_name'),
+                            'course': rec.get('course'),
+                            'present_at': rec.get('present_at'),
+                            'confidence': rec.get('confidence'),
+                            'status': status
+                        })
+                    else:
+                        # No attendance record: mark as Absent
+                        writer.writerow({
+                            'student_id': student.get('student_id'),
+                            'first_name': student.get('first_name'),
+                            'last_name': student.get('last_name'),
+                            'course': student.get('course'),
+                            'present_at': '',
+                            'confidence': '',
+                            'status': 'Absent'
+                        })
             else:
-                # Write a message row if no attendance was recorded
-                writer.writerow({k: 'NO ATTENDANCE RECORDED' if k == 'student_id' else '' for k in fieldnames})
-        logging.info(f"Wrote {len(records) if records else 0} attendance records for session {current_session_id} to {session_csv}")
+                # Write a message row if no students assigned
+                writer.writerow({k: 'NO STUDENTS ASSIGNED' if k == 'student_id' else '' for k in fieldnames})
+        logging.info(f"Wrote attendance records for session {current_session_id} to {session_csv}")
     except Exception as e:
         logging.error(f"Failed to write attendance CSV for session {current_session_id}: {e}")
 

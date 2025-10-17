@@ -1,8 +1,8 @@
-1. Add a mechanism where the set up of an accout uses a geenric password that is sent to the persons email to allow them to log in and they will be prompted to change it when they log in
-2. Not all the functionalities are done in the manage lecs 
+1. Add a mechanism where the set up of an accout uses a geenric password that is sent to the persons email to allow them to log in and they will be prompted to change it when they log in#
+2. Not all the functionalities are done in the manage lecs#
 pupulate the dropdowns
-refactor the form details to make them more robust
-The issue with the search bar in the manage users module
+refactor the form details to make them more robust#
+The issue with the search bar in the manage users module#
 for the capture face in manage users, ensure it soft deletes the old embeddings and uses the new ones
 
 
@@ -11,3 +11,19 @@ another approach can be when the lecturer hits export attendance, it sends the c
 
 
 add search for the dropdowns
+
+fix the issue with the lecturers panel and the name
+
+Make sure that the add class thing works, and registers to the database
+
+password hashing
+
+
+
+
+
+How to start the project:
+1. Lecturer module: python lec_main.py 
+2. Admin mosule : python main.py
+3. Start the API server: student_dashboard_api.py
+4. Starting the React web app : npm run dev

@@ -443,18 +443,11 @@ class DashboardFrame(tk.Frame):
         # Nav content (now inside __init__)
         tk.Label(self.nav_frame, text="Admin Panel", bg="#2b3a42", fg="white", font=("Arial", 14)).pack(pady=(18, 8))
         tk.Button(self.nav_frame, text="Add Student", width=20, command=self.show_add_student).pack(pady=8)
-        tk.Button(self.nav_frame, text="Manage Users", width=20, command=self.show_manage_users).pack(pady=8)
+        tk.Button(self.nav_frame, text="Manage Students", width=20, command=self.show_manage_users).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Lecturers", width=20, command=self.show_manage_lecturers).pack(pady=8)
         tk.Button(self.nav_frame, text="Manage Classes", width=20, command=self.show_manage_classes).pack(pady=8)
         tk.Button(self.nav_frame, text="Attendance Sessions", width=20, command=lambda: messagebox.showinfo("Info", "Feature coming soon!")).pack(pady=8)
         tk.Button(self.nav_frame, text="Attendance Reports", width=20, command=self.export_reports).pack(pady=8)
-        # Admission number input for targeted recognition
-        admission_frame = tk.Frame(self.nav_frame, bg="#2b3a42")
-        admission_frame.pack(pady=(12, 0))
-        tk.Label(admission_frame, text="Admission No.:", bg="#2b3a42", fg="white").pack(side="left", padx=(0, 4))
-        self.admission_var = tk.StringVar()
-        tk.Entry(admission_frame, textvariable=self.admission_var, width=12).pack(side="left")
-        tk.Button(self.nav_frame, text="Simulate Attendance", width=20, command=self.start_attendance).pack(pady=8)
         # spacer
         tk.Label(self.nav_frame, text="", bg="#2b3a42").pack(expand=True, fill="y")
         tk.Button(self.nav_frame, text="Logout", fg="white", bg="#d9534f", width=20, command=self.logout).pack(pady=14)
@@ -469,6 +462,25 @@ class DashboardFrame(tk.Frame):
 
     # ---------------- Add Student ----------------
     def show_add_student(self):
+        course_options = [
+            "Bachelor of Science in Tourism Management (BTM)",
+            "Bachelor of Science in Hospitality Management (BHM)",
+            "Bachelor of Business Science: Financial Engineering (BBSFENG)",
+            "Bachelor of Business Science: Financial Economics (BBSFE)",
+            "Bachelor of Business Science: Actuarial Science (BBSACT)",
+            "Bachelor Of Science In Informatics And Computer Science (BICS)",
+            "Bachelor Of Business Information Technology (BBIT)",
+            "BSc. Computer Networks and Cyber Security (BCNS)",
+            "Bachelor of Laws (LLB)",
+            "Bachelor of Arts in Communication (BAC)",
+            "Bachelor of Arts in International Studies",
+            "Bachelor of Arts in Development Studies and Philosophy (BDP)",
+            "Bachelor of Science in Supply Chain and Operations Management (BSCM)",
+            "Bachelor of Financial Services (BFS)",
+            "Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)",
+            "BSc in Statistics and Data Science (BScSDS)",
+            "Bachelor of Commerce (BCOM)"
+        ]
         self.clear_main()
         frame = tk.Frame(self.main_area, bg="#ffffff", padx=16, pady=16)
         frame.pack(fill="both", expand=True)
@@ -515,25 +527,8 @@ class DashboardFrame(tk.Frame):
             "course": "Required. Student's course of study.",
             "year_of_study": "Required. Year of study (e.g., 1, 2, 3, 4)."
         }
-        course_options = [
-            "Bachelor of Science in Tourism Management (BTM)",
-            "Bachelor of Science in Hospitality Management (BHM)",
-            "Bachelor of Business Science: Financial Engineering (BBSFENG)",
-            "Bachelor of Business Science: Financial Economics (BBSFE)",
-            "Bachelor of Business Science: Actuarial Science (BBSACT)",
-            "Bachelor Of Science In Informatics And Computer Science (BICS)",
-            "Bachelor Of Business Information Technology (BBIT)",
-            "BSc. Computer Networks and Cyber Security (BCNS)",
-            "Bachelor of Laws (LLB)",
-            "Bachelor of Arts in Communication (BAC)",
-            "Bachelor of Arts in International Studies",
-            "Bachelor of Arts in Development Studies and Philosophy (BDP)",
-            "Bachelor of Science in Supply Chain and Operations Management (BSCM)",
-            "Bachelor of Financial Services (BFS)",
-            "Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)",
-            "BSc in Statistics and Data Science (BScSDS)",
-            "Bachelor of Commerce (BCOM)"
-        ]
+        country_codes = ['+254', '+1', '+44', '+91', '+61', '+81', '+49', '+33', '+86', '+27']
+        country_code_var = tk.StringVar(value='+254')
         for i, (label, key) in enumerate(fields):
             required = key in ["first_name", "last_name", "email", "course", "year_of_study"]
             label_widget = tk.Label(form, text=label + ("*" if required else "") + ":", bg="#ffffff")
@@ -544,9 +539,17 @@ class DashboardFrame(tk.Frame):
                 from tkinter import ttk
                 course_combo = ttk.Combobox(form, textvariable=sv, values=course_options, state="readonly", width=36)
                 course_combo.grid(row=i, column=1, pady=6, padx=6)
+            elif key == "phone":
+                from tkinter import ttk
+                phone_frame = tk.Frame(form, bg="#ffffff")
+                phone_frame.grid(row=i, column=1, pady=6, padx=6, sticky="w")
+                code_combo = ttk.Combobox(phone_frame, textvariable=country_code_var, values=country_codes, state="readonly", width=6)
+                code_combo.pack(side="left", padx=(0, 4))
+                tk.Entry(phone_frame, textvariable=sv, width=28).pack(side="left")
             else:
                 tk.Entry(form, textvariable=sv, width=38).grid(row=i, column=1, pady=6, padx=6)
             self.add_vars[key] = sv
+        self.add_vars['country_code'] = country_code_var
 
         btn_frame = tk.Frame(frame, bg="#ffffff")
         btn_frame.pack(pady=12)
@@ -556,6 +559,33 @@ class DashboardFrame(tk.Frame):
         self.last_registered_student = None
 
     def assign_students_to_class_dialog(self):
+        def unassign_selected():
+            selected_class = class_var.get()
+            if not selected_class:
+                messagebox.showerror("Validation", "Please select a class.")
+                return
+            class_id = selected_class.split(" - ", 1)[0]
+            sel = list(selected_lb.curselection())
+            if not sel:
+                messagebox.showerror("Validation", "Please select student(s) to unassign.")
+                return
+            student_ids = []
+            for i in sel:
+                val = selected_lb.get(i)
+                sid = val.split(" - ", 1)[0]
+                student_ids.append(sid)
+            try:
+                self.user_manager.unassign_students_from_class(class_id, student_ids)
+                # Remove from UI
+                for i in reversed(sel):
+                    val = selected_lb.get(i)
+                    sid = val.split(" - ", 1)[0]
+                    if sid in selected_students:
+                        del selected_students[sid]
+                    selected_lb.delete(i)
+                messagebox.showinfo("Success", f"Unassigned {len(student_ids)} student(s) from class.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to unassign students: {e}")
         def load_assigned_students(event=None):
             # Clear selected list and dict
             selected_lb.delete(0, tk.END)
@@ -682,8 +712,12 @@ class DashboardFrame(tk.Frame):
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to assign students: {e}")
 
-        confirm_btn = tk.Button(dlg, text="Confirm Assignment", command=confirm_assignment, width=20)
-        confirm_btn.pack(pady=12)
+        btn_frame = tk.Frame(dlg)
+        btn_frame.pack(pady=12)
+        confirm_btn = tk.Button(btn_frame, text="Confirm Assignment", command=confirm_assignment, width=20)
+        confirm_btn.pack(side="left", padx=6)
+        unassign_btn = tk.Button(btn_frame, text="Unassign from Class", command=unassign_selected, width=20)
+        unassign_btn.pack(side="left", padx=6)
 
     # ---------------- Manage Users ----------------
     def show_manage_users(self):
@@ -733,12 +767,12 @@ class DashboardFrame(tk.Frame):
         self.users_tree = tree
 
         btn_frame = tk.Frame(frame, bg="#ffffff")
-        btn_frame.pack(pady=6)
         tk.Button(btn_frame, text="Toggle Active", command=self.toggle_active).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Edit Selected", command=self.edit_user).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Capture Face", command=self.capture_face_for_selected).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Refresh", command=lambda: self.load_users(limit=20)).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Assign to Class", command=self.assign_students_to_class_dialog, width=16).pack(side="left", padx=6)
+        btn_frame.pack(pady=12)
 
         # 🔑 Load first 20 users at startup
         self.load_users(limit=20)
@@ -753,6 +787,12 @@ class DashboardFrame(tk.Frame):
         student_id = vals[0]
         if not student_id or str(student_id).lower() == 'none':
             messagebox.showerror("Error", "Selected user does not have a valid student ID.")
+            return
+        try:
+            # Delete existing embeddings before recapturing
+            self.user_manager.delete_face_embeddings(student_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete existing embeddings: {e}")
             return
         try:
             python_exe = sys.executable
@@ -895,26 +935,27 @@ class DashboardFrame(tk.Frame):
         tk.Button(btn_frame_top, text="Refresh", command=lambda: self.load_lecturers(limit=20)).pack(side="left", padx=6)
 
 
-        # Treeview for lecturers (move here from create_class_dialog)
-        columns = ("user_id", "lecturer_id", "name", "email", "department", "academic_rank", "hire_date", "status", "office_location", "specialization", "classes", "active")
+        # Treeview for lecturers (updated columns)
+        columns = ("lecturer_id", "first_name", "last_name", "email", "phone", "department", "academic_rank", "office_location", "specialization", "active")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
         col_widths = {
-            "user_id": 90,
             "lecturer_id": 100,
-            "name": 140,
+            "first_name": 110,
+            "last_name": 110,
             "email": 200,
+            "phone": 120,
             "department": 120,
             "academic_rank": 120,
-            "hire_date": 110,
-            "status": 90,
             "office_location": 120,
             "specialization": 140,
-            "classes": 200,
             "active": 80
         }
         for col in columns:
+            anchor = "center"
+            if col in ("first_name", "last_name", "email", "department", "academic_rank", "office_location", "specialization"):
+                anchor = "w"
             tree.heading(col, text=col.replace("_", " ").title())
-            tree.column(col, width=col_widths.get(col, 120), anchor="w" if col == "classes" else "center")
+            tree.column(col, width=col_widths.get(col, 120), anchor=anchor)
         tree.pack(fill="both", expand=True, pady=(8, 8))
         self.lecturers_tree = tree
 
@@ -1069,41 +1110,28 @@ class DashboardFrame(tk.Frame):
             messagebox.showerror("DB Error", f"Failed to fetch lecturers: {e}")
             return
 
+        if not lecturers:
+            self.lecturers_tree.insert("", "end", values=("", "", "", "", "", "", "", "", "", ""))
+            self.lecturers_tree.set(self.lecturers_tree.get_children()[0], column="first_name", value="No lecturers to display.")
+            return
+
         count = 0
-        for l in lecturers:
+        for idx, l in enumerate(lecturers):
             if limit and count >= limit:
                 break
-            user_id = l.get("user_id") or l.get("id") or l.get("userId") or ""
             lecturer_id = l.get("lecturer_id") or ""
-            name = l.get("name") or f"{l.get('first_name','')} {l.get('last_name','')}"
+            first_name = l.get("first_name", "")
+            last_name = l.get("last_name", "")
             email = l.get("email") or l.get("lecturer_email") or ""
-            department = l.get("department") or ""
-            academic_rank = l.get("academic_rank") or ""
-            hire_date = l.get("hire_date") or ""
-            status_val = l.get("status") or ""
-            office_location = l.get("office_location") or ""
-            specialization = l.get("specialization") or ""
+            phone = l.get("phone", "")
+            department = l.get("department", "")
+            academic_rank = l.get("academic_rank", "")
+            office_location = l.get("office_location", "")
+            specialization = l.get("specialization", "")
             active_flag = l.get("active") if "active" in l else l.get("is_active", 1)
             active_text = "Active" if str(active_flag) == "1" else "Inactive"
 
-            # classes: robustly obtain and display class names
-            classes_text = ""
-            try:
-                classes = safe_call(self.user_manager, "get_lecturer_classes", lecturer_id)
-                if classes and isinstance(classes, (list, tuple)):
-                    class_names = []
-                    for c in classes:
-                        if isinstance(c, dict):
-                            name = c.get("class_name") or c.get("name") or c.get("code") or c.get("id")
-                            if name:
-                                class_names.append(str(name))
-                        else:
-                            class_names.append(str(c))
-                    classes_text = ", ".join(class_names)
-            except Exception:
-                classes_text = ""
-
-            join_text = f"{user_id} {lecturer_id} {name} {email} {department} {academic_rank} {hire_date} {status_val} {office_location} {specialization} {classes_text}".lower()
+            join_text = f"{lecturer_id} {first_name} {last_name} {email} {phone} {department} {academic_rank} {office_location} {specialization}".lower()
             if search_q and search_q not in join_text:
                 continue
             if status_filter == "Active" and active_text != "Active":
@@ -1111,8 +1139,24 @@ class DashboardFrame(tk.Frame):
             if status_filter == "Inactive" and active_text != "Inactive":
                 continue
 
-            self.lecturers_tree.insert("", "end", values=(user_id, lecturer_id, name, email, department, academic_rank, hire_date, status_val, office_location, specialization, classes_text, active_text))
+            row_tags = ("evenrow",) if idx % 2 == 0 else ("oddrow",)
+            # Insert row with tag for striping
+            self.lecturers_tree.insert("", "end", values=(lecturer_id, first_name, last_name, email, phone, department, academic_rank, office_location, specialization, active_text), tags=row_tags)
             count += 1
+
+        # Apply tag styles for striping
+        self.lecturers_tree.tag_configure('evenrow', background='#f7fafd')
+        self.lecturers_tree.tag_configure('oddrow', background='#e9f0f7')
+
+        # Color code active status
+        for item in self.lecturers_tree.get_children():
+            vals = self.lecturers_tree.item(item, "values")
+            if vals and vals[-1] == "Active":
+                self.lecturers_tree.item(item, tags=self.lecturers_tree.item(item, "tags") + ("active",))
+            elif vals and vals[-1] == "Inactive":
+                self.lecturers_tree.item(item, tags=self.lecturers_tree.item(item, "tags") + ("inactive",))
+        self.lecturers_tree.tag_configure('active', foreground='#228B22')
+        self.lecturers_tree.tag_configure('inactive', foreground='#B22222')
 
     def create_lecturer_dialog(self):
         dlg = LecturerDialog(self, None, self.user_manager, on_saved=lambda: self.load_lecturers(limit=20))
@@ -1125,7 +1169,7 @@ class DashboardFrame(tk.Frame):
             return
         item = sel[0]
         vals = self.lecturers_tree.item(item, "values")
-        lecturer_id = vals[1]  # Assuming the second column is lecturer_id (L001, etc.)
+        lecturer_id = vals[0]  # Now the first column is lecturer_id (L001, etc.)
         try:
             lecturer = self.user_manager.get_lecturer_by_lecturer_id(lecturer_id)
         except Exception as e:
@@ -1278,7 +1322,7 @@ class DashboardFrame(tk.Frame):
         control_frame = tk.Frame(frame, bg="#ffffff")
         control_frame.pack(fill="x", pady=(0, 8))
 
-        tk.Button(control_frame, text="Add Class", command=self.add_class_dialog).pack(side="left", padx=6)
+        tk.Button(control_frame, text="Add Class", command=self.create_class_dialog).pack(side="left", padx=6)
         tk.Button(control_frame, text="Edit Selected", command=self.edit_class_dialog).pack(side="left", padx=6)
         tk.Button(control_frame, text="Assign Students", command=self.assign_students_to_class_dialog).pack(side="left", padx=6)
         tk.Button(control_frame, text="Refresh", command=self.load_classes).pack(side="left", padx=6)
@@ -1322,47 +1366,6 @@ class DashboardFrame(tk.Frame):
             code = c.get("code")
             self.classes_tree.insert("", "end", values=(class_id, cohort_id, class_name, code))
 
-    def add_class_dialog(self):
-        dlg = tk.Toplevel(self)
-        dlg.title("Add Class")
-        dlg.geometry("340x260")
-        dlg.transient(self)
-        dlg.grab_set()
-
-        form = tk.Frame(dlg, padx=12, pady=12)
-        form.pack(fill="both", expand=True)
-
-        fields = [
-            ("Course ID", "course_id"),
-            ("Year", "year"),
-            ("Semester", "semester")
-        ]
-        vars = {}
-        for i, (label, key) in enumerate(fields):
-            tk.Label(form, text=label+":").grid(row=i, column=0, sticky="e", pady=6, padx=6)
-            sv = tk.StringVar()
-            tk.Entry(form, textvariable=sv, width=24).grid(row=i, column=1, pady=6, padx=6)
-            vars[key] = sv
-
-        def on_save():
-            class_data = {k: v.get().strip() for k, v in vars.items()}
-            if not class_data["course_id"] or not class_data["year"] or not class_data["semester"]:
-                messagebox.showerror("Validation", "All fields are required.")
-                return
-            try:
-                new_id = safe_call(self.user_manager, "create_class", class_data)
-                messagebox.showinfo("Created", f"Class created (id={new_id}).")
-                dlg.destroy()
-                self.load_classes()
-            except AttributeError as e:
-                messagebox.showerror("Missing DB Method", str(e))
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to create class: {e}")
-
-        btns = tk.Frame(form)
-        btns.grid(row=len(fields), column=0, columnspan=2, pady=12)
-        tk.Button(btns, text="Save", command=on_save, width=12).pack(side="left", padx=6)
-        tk.Button(btns, text="Cancel", command=dlg.destroy, width=12).pack(side="left", padx=6)
 
     def edit_class_dialog(self):
         sel = self.classes_tree.selection()
@@ -1418,24 +1421,6 @@ class DashboardFrame(tk.Frame):
         tk.Button(btns, text="Cancel", command=dlg.destroy, width=12).pack(side="left", padx=6)
 
     # ---------------- Start Attendance ----------------
-    def start_attendance(self):
-        script_path = resource_path("rec_faces_test.py")
-        if not os.path.exists(script_path):
-            messagebox.showerror("Error", f"rec_faces_test.py not found at {script_path}")
-            return
-        python_exe = sys.executable
-        admission_no = self.admission_var.get().strip()
-        cmd = [python_exe, script_path]
-        if admission_no:
-            cmd.append(admission_no)
-        try:
-            subprocess.Popen(cmd)
-            if admission_no:
-                messagebox.showinfo("Test Mode Started", f"Face recognition test window launched for Admission No: {admission_no}.")
-            else:
-                messagebox.showinfo("Test Mode Started", "Face recognition test window launched. No attendance will be marked.")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to launch recognition test: {e}")
 
     # ---------------- Reports (CSV) ----------------
     def export_reports(self):

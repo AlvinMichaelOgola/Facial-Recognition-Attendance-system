@@ -110,6 +110,148 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+    def unassign_students_from_class(self, class_id: int, student_ids: list) -> None:
+        """
+        Remove the given student_ids from the class_students_two table for the specified class_id.
+        """
+        if not student_ids:
+            return
+        q = "DELETE FROM class_students_two WHERE class_id=%s AND student_id=%s"
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    for sid in student_ids:
+                        cur.execute(q, (class_id, sid))
+                conn.commit()
+        except Exception as e:
+            print(f"[ERROR] Failed to unassign students from class {class_id}: {e}")
+            raise
+    def get_students_for_class(self, class_id: int) -> list:
+        """
+        Returns all students assigned to the given class_id, including first_name, last_name, student_id, and course.
+        """
+        q = '''
+            SELECT s.student_id, u.first_name, u.last_name, s.course
+            FROM students s
+            JOIN users u ON s.user_id = u.id
+            JOIN class_students_two cs ON s.student_id = cs.student_id
+            WHERE cs.class_id = %s AND u.active = 1
+            ORDER BY u.last_name ASC, u.first_name ASC
+        '''
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (class_id,))
+                    return cur.fetchall()
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch students for class {class_id}: {e}")
+            return []
+    def delete_face_embeddings(self, student_id) -> None:
+        """
+        Delete all face embeddings for the given student_id from the face_embeddings table.
+        """
+        q = "DELETE FROM face_embeddings WHERE student_id=%s"
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id,))
+                conn.commit()
+        except Exception as e:
+            print(f"[ERROR] Failed to delete embeddings for student_id {student_id}: {e}")
+            raise
+    def mark_absent_students_for_session(self, session_id: int, present_student_ids: list) -> None:
+        """
+        For the given attendance session, mark all students assigned to the class as absent except those in present_student_ids.
+        """
+        # Get class_id for the session
+        session = self.get_session_by_id(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        class_id = session["class_id"] if isinstance(session, dict) else session[1]
+        # Get all students assigned to the class
+        all_student_ids = set(self.get_student_ids_for_class(class_id))
+        present_set = set(present_student_ids)
+        absent_student_ids = all_student_ids - present_set
+        if not absent_student_ids:
+            return
+        # Insert absent records
+        q = "INSERT INTO attendance_records_two (session_id, student_id, present_at, confidence) VALUES (%s, %s, NULL, 0)"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                for sid in absent_student_ids:
+                    cur.execute(q, (session_id, sid))
+            conn.commit()
+    def assign_lecturer_to_class(self, class_id: int, lecturer_id: str, date: str = None, start_time: str = None, end_time: str = None, room: str = None) -> None:
+        """
+        Assign a lecturer to a class in the classes_two table and optionally update date, start_time, end_time, and room.
+        """
+        fields = ["lecturer_id"]
+        values = [lecturer_id]
+        if date is not None:
+            fields.append("date")
+            values.append(date)
+        if start_time is not None:
+            fields.append("start_time")
+            values.append(start_time)
+        if end_time is not None:
+            fields.append("end_time")
+            values.append(end_time)
+        if room is not None:
+            fields.append("room")
+            values.append(room)
+        set_clause = ", ".join([f"{field} = %s" for field in fields])
+        q = f"UPDATE classes_two SET {set_clause} WHERE id = %s"
+        values.append(class_id)
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, tuple(values))
+                conn.commit()
+    def update_student_profile_photo(self, student_id: str, photo_bytes: bytes) -> int:
+        """Update the profile_photo BLOB for a student. Returns affected row count."""
+        student_id = str(student_id).strip() if student_id is not None else student_id
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Log all student_ids in the table
+                    cur.execute("SELECT student_id FROM students")
+                    all_ids = [str(row['student_id']).strip() for row in cur.fetchall()]
+                    print(f"[DEBUG] All student_ids in DB: {all_ids}")
+                    # Log result of direct SELECT for this student_id
+                    cur.execute("SELECT student_id FROM students WHERE student_id=%s", (student_id,))
+                    match_row = cur.fetchone()
+                    print(f"[DEBUG] Direct SELECT for student_id={repr(student_id)}: {match_row}")
+                    # Now do the update
+                    # Update profile_photo in students
+                    q = "UPDATE students SET profile_photo=%s WHERE student_id=%s"
+                    cur.execute(q, (photo_bytes, student_id))
+                    affected = cur.rowcount
+                    print(f"[DEBUG] update_student_profile_photo: student_id={repr(student_id)}, affected={affected}")
+                    # Also update users.updated_at for the corresponding user
+                    cur.execute("SELECT user_id FROM students WHERE student_id=%s", (student_id,))
+                    user_row = cur.fetchone()
+                    if user_row and 'user_id' in user_row:
+                        cur.execute("UPDATE users SET updated_at=NOW() WHERE id=%s", (user_row['user_id'],))
+                conn.commit()
+            return affected
+        except Exception as e:
+            print(f"[ERROR] Failed to update profile photo for {repr(student_id)}: {e}")
+            return 0
+
+    def get_student_profile_photo(self, student_id: str) -> bytes:
+        """Retrieve the profile_photo BLOB for a student."""
+        student_id = str(student_id).strip() if student_id is not None else student_id
+        q = "SELECT profile_photo FROM students WHERE student_id=%s"
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id,))
+                    row = cur.fetchone()
+                    if row and row['profile_photo']:
+                        return row['profile_photo']
+            return None
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch profile photo for {repr(student_id)}: {e}")
+            return None
     def download_attendance_csv(self, student_id: str, file_path: str) -> None:
         """
         Export all attendance records for a student as a CSV file.
@@ -316,17 +458,24 @@ class UserDataManager:
         Returns the new class id.
         """
         q = """
-            INSERT INTO classes_two (cohort_id, lecturer_id, class_name, code, description, schedule)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO classes_two (cohort_id, lecturer_id, class_name, code, description, date, start_time, end_time, room)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        params = (
-            int(class_data["cohort_id"]),
-            str(class_data["lecturer_id"]),
-            class_data["class_name"],
-            class_data["code"],
-            class_data.get("description", ""),
-            class_data.get("schedule", "")
-        )
+        print(f"[DEBUG] Received class_data for create_class: {class_data}")
+        try:
+            cohort_id = int(class_data.get("cohort_id", 1))
+            lecturer_id = str(class_data["lecturer_id"])
+            class_name = class_data["class_name"]
+            code = class_data["code"]
+            description = class_data.get("description", "")
+            date = class_data.get("date", None)
+            start_time = class_data.get("start_time", None)
+            end_time = class_data.get("end_time", None)
+            room = class_data.get("room", None)
+        except KeyError as e:
+            print(f"[ERROR] Missing required field for create_class: {e}")
+            raise ValueError(f"Missing required field for create_class: {e}")
+        params = (cohort_id, lecturer_id, class_name, code, description, date, start_time, end_time, room)
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(q, params)
@@ -339,7 +488,7 @@ class UserDataManager:
         class_data should contain: cohort_id, lecturer_id, class_name, code, description, schedule
         """
         q = """
-            UPDATE classes_two SET cohort_id=%s, lecturer_id=%s, class_name=%s, code=%s, description=%s, schedule=%s
+            UPDATE classes_two SET cohort_id=%s, lecturer_id=%s, class_name=%s, code=%s, description=%s, date=%s, start_time=%s, end_time=%s, room=%s
             WHERE id=%s
         """
         params = (
@@ -348,7 +497,10 @@ class UserDataManager:
             class_data["class_name"],
             class_data["code"],
             class_data.get("description", ""),
-            class_data.get("schedule", ""),
+            class_data.get("date", None),
+            class_data.get("start_time", None),
+            class_data.get("end_time", None),
+            class_data.get("room", None),
             int(class_id)
         )
         with self.db_manager.get_connection() as conn:
@@ -363,33 +515,6 @@ class UserDataManager:
             with conn.cursor(pymysql.cursors.DictCursor) as cur:
                 cur.execute(q)
                 return cur.fetchall()
-    def create_class(self, class_data: Dict[str, Any]) -> int:
-        """
-        Create a new class in the classes_two table.
-        class_data should contain: cohort_id, lecturer_id, class_name, code, description, schedule
-        Returns the new class id.
-        """
-        q = """
-            INSERT INTO classes_two (cohort_id, lecturer_id, class_name, code, description, schedule)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        params = (
-            int(class_data["cohort_id"]),
-            str(class_data["lecturer_id"]),
-            class_data["class_name"],
-            class_data["code"],
-            class_data.get("description", ""),
-            class_data.get("schedule", "")
-        )
-        with self.db_manager.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(q, params)
-                conn.commit()
-                return cur.lastrowid
-            with self.conn.cursor() as cur:
-                cur.execute(q, params)
-                self.conn.commit()
-                return cur.lastrowid
 
     def authenticate_lecturer(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """
@@ -1034,24 +1159,6 @@ class UserDataManager:
         except Exception:
             raise
 
-    def assign_lecturer_to_class(self, lecturer_identifier: Any, class_id: int, admin_id: int = None) -> None:
-        """
-        Inserts a mapping between lecturer (lecturers.id or users.id) and class.
-        """
-        try:
-            # Always use the string lecturer_id (e.g., 'L001') for the mapping table
-            lecturer_id_str = str(lecturer_identifier)
-            print(f"[DEBUG] Inserting into lecturer_classes: lecturer_id={lecturer_id_str}, class_id={class_id}")
-            q = "INSERT INTO lecturer_classes (lecturer_id, class_id, assigned_by, assigned_at) VALUES (%s, %s, %s, NOW())"
-            assigned_by = 'system'  # Replace with admin user ID if available
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(q, (lecturer_id_str, class_id, assigned_by))
-                conn.commit()
-            if admin_id is not None:
-                self.log_admin_action(admin_id, "assign_lecturer_to_class", {"lecturer_id": lecturer_id_str, "class_id": class_id})
-        except Exception:
-            raise
 
     def assign_lecturer_to_classes(self, lecturer_identifier: Any, class_ids: Iterable[Any], admin_id: int = None) -> None:
         """

@@ -317,6 +317,24 @@ class LecturerApp(tb.Window):
         except Exception:
             pass
 
+        # Mark absent students for this session
+        try:
+            # Use self.logged_names as present names, map to student_ids
+            # If names are student_ids, use directly; else map names to ids
+            present_student_ids = []
+            # If rec_faces provides marked student_ids, use that
+            if hasattr(rec_faces, 'marked_student_ids'):
+                present_student_ids = list(rec_faces.marked_student_ids)
+            elif hasattr(rec_faces, 'marked_names'):
+                # If marked_names are student_ids
+                present_student_ids = list(rec_faces.marked_names)
+            else:
+                # Fallback: try to use self.logged_names
+                present_student_ids = list(self.logged_names)
+            self.db.mark_absent_students_for_session(self.session_id, present_student_ids)
+        except Exception as e:
+            logging.error(f"Failed to mark absent students: {e}")
+
         # Clear UI back to placeholder
         for widget in self.preview_container.winfo_children():
             widget.destroy()
