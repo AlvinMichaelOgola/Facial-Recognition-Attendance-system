@@ -1,23 +1,3 @@
-"""
-user_data_manager.py
-
-Database-backed user & student manager for FRS MVP.
-
-Dependencies:
-- PyMySQL (pip install pymysql)
-
-Expected DB tables (simplified):
-- users (id PK, first_name, last_name, email UNIQUE, phone, password, role, registration_date, active, is_active, created_at, updated_at, created_by)
-- students (id PK, student_id UNIQUE, user_id FK -> users.id, school, cohort, course, year_of_study)
-- face_embeddings (id PK, student_id, embedding BLOB, created_at)
-- lecturers (id PK, lecturer_id, name, email, department, academic_rank, hire_date, status, office_location, specialization, created_at, updated_at, user_id)
-- classes (id PK, cohort_id, class_name, code, ...)
-- lecturer_classes (id PK, lecturer_id FK -> lecturers.id, class_id FK -> classes.id)
-- attendance_sessions (id PK, class_id, lecturer_id, name, started_at, ended_at, status)
-- attendance_records (id PK, session_id, student_id, present_at, confidence)
-
-If your schema uses different column names, adapt the SQL accordingly.
-"""
 
 import os
 import pickle
@@ -38,7 +18,8 @@ class DatabaseManager:
         Return all attendance records for a student as a list of dicts.
         Each dict contains: date, class, session, status, confidence, lecturer, etc.
         """
-        q = '''
+        q = (
+            """
             SELECT ar.session_id, ar.present_at, ar.confidence, c.class_name, ats.name AS session_name, ats.started_at, ats.ended_at, l.first_name AS lecturer_first_name, l.last_name AS lecturer_last_name
             FROM attendance_records_two ar
             LEFT JOIN attendance_sessions_two ats ON ar.session_id = ats.id
@@ -46,7 +27,8 @@ class DatabaseManager:
             LEFT JOIN lecturers_table_two l ON ats.lecturer_id = l.lecturer_id
             WHERE ar.student_id = %s
             ORDER BY ar.present_at DESC
-        '''
+            """
+        )
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -110,6 +92,151 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+    def get_user_by_student_id(self, student_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Return user row by joining students and users tables using student_id.
+        """
+        q = "SELECT u.* FROM users u JOIN students s ON u.id = s.user_id WHERE s.student_id = %s LIMIT 1"
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id,))
+                    return cur.fetchone()
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch user for student_id {student_id}: {e}")
+            return None
+    def delete_face_embeddings(self, student_id) -> None:
+        """
+        Delete all face embeddings for the given student_id from the face_embeddings table.
+        """
+        q = "DELETE FROM face_embeddings WHERE student_id = %s"
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id,))
+                conn.commit()
+        except Exception:
+            raise
+    def send_absent_attendance_emails(self, session_id: int, progress_callback=None):
+        """
+        Send an email to each student marked absent in the given session, with class and lecturer name.
+        """
+        try:
+            from email_utils import ABSENT_TEMPLATE, send_emails_batch
+            absent_records = self.get_attendance_for_session(session_id)
+            session = self.get_session_by_id(session_id)
+            class_name = ""
+            lecturer_name = ""
+            if session:
+                class_info = self.get_class_by_id(session.get('class_id'))
+                class_name = class_info.get('class_name', '') if class_info else ''
+                lecturer_id = session.get('lecturer_id') if 'lecturer_id' in session else None
+                if lecturer_id:
+                    lec = self.get_lecturer_by_lecturer_id(lecturer_id)
+                    if lec:
+                        lecturer_name = f"{lec.get('first_name', '')} {lec.get('last_name', '')}".strip()
+            print("[Absent Attendance Emails] Fetched emails:")
+            email_messages = {}
+            for rec in absent_records:
+                if not rec.get('present_at'):
+                    email = rec.get('email') if 'email' in rec else None
+                    if not email:
+                        user = self.get_user_by_student_id(rec['student_id'])
+                        print(f"    Lookup user for student_id={rec['student_id']}: {user}")
+                        email = user.get('email') if user else None
+                    print(f"  {email}")
+                    if email and '@' in email and email not in email_messages:
+                        subject = "Attendance Not Marked"
+                        body = ABSENT_TEMPLATE.format(
+                            first_name=rec.get('first_name', ''),
+                            class_name=class_name,
+                            lecturer_name=lecturer_name
+                        )
+                        email_messages[email] = {
+                            'recipient_email': email,
+                            'subject': subject,
+                            'body': body,
+                            'html': True
+                        }
+            if email_messages:
+                send_emails_batch(list(email_messages.values()), progress_callback=progress_callback)
+        except Exception as e:
+            print(f"[ERROR] Failed to send absent attendance emails: {e}")
+    def send_present_attendance_emails(self, session_id: int, progress_callback=None):
+        """
+        Send an email to each student marked present in the given session, with class and lecturer name.
+        """
+        try:
+            from email_utils import ATTENDANCE_TEMPLATE, send_emails_batch
+            present_records = self.get_attendance_for_session(session_id)
+            session = self.get_session_by_id(session_id)
+            class_name = ""
+            lecturer_name = ""
+            if session:
+                class_info = self.get_class_by_id(session.get('class_id'))
+                class_name = class_info.get('class_name', '') if class_info else ''
+                lecturer_id = session.get('lecturer_id') if 'lecturer_id' in session else None
+                if lecturer_id:
+                    lec = self.get_lecturer_by_lecturer_id(lecturer_id)
+                    if lec:
+                        lecturer_name = f"{lec.get('first_name', '')} {lec.get('last_name', '')}".strip()
+            print("[Present Attendance Emails] Fetched emails:")
+            email_messages = {}
+            for rec in present_records:
+                if rec.get('present_at'):
+                    email = rec.get('email') if 'email' in rec else None
+                    if not email:
+                        user = self.get_user_by_student_id(rec['student_id'])
+                        print(f"    Lookup user for student_id={rec['student_id']}: {user}")
+                        email = user.get('email') if user else None
+                    print(f"  {email}")
+                    if email and '@' in email and email not in email_messages:
+                        subject = "Attendance Marked"
+                        body = ATTENDANCE_TEMPLATE.format(
+                            first_name=rec.get('first_name', ''),
+                            class_name=class_name,
+                            lecturer_name=lecturer_name
+                        )
+                        email_messages[email] = {
+                            'recipient_email': email,
+                            'subject': subject,
+                            'body': body,
+                            'html': True
+                        }
+            if email_messages:
+                send_emails_batch(list(email_messages.values()), progress_callback=progress_callback)
+        except Exception as e:
+            print(f"[ERROR] Failed to send present attendance emails: {e}")
+    def reset_student_password_and_email(self, student_id: str) -> None:
+        """
+        Resets a student's password, generates a random password, updates it, and emails the student (no admin authentication).
+        """
+        import random
+        import string
+        # Get student info
+        student = self.get_student(student_id)
+        if not student:
+            raise Exception("Student not found.")
+        email = student.get("email")
+        if not email:
+            raise Exception("Student email not found.")
+        # Generate random password
+        new_password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+        # Update password (hashed)
+        self.update_user(student_id, {"password": new_password}, {})
+        # Email the new password to the student
+        subject = "Your Attendance System Password Has Been Reset"
+        body = f"""
+        <html><body>
+        <h2>Password Reset</h2>
+        <p>Hello {student.get('first_name', '')},</p>
+        <p>Your password has been reset by the administrator. Your new temporary password is:</p>
+        <p><b>{new_password}</b></p>
+        <p>Please log in and change your password after your first login.</p>
+        <br><p>Best regards,<br>Attendance System Team</p>
+        </body></html>
+        """
+        send_email(email, subject, body, html=True)
     def unassign_students_from_class(self, class_id: int, student_ids: list) -> None:
         """
         Remove the given student_ids from the class_students_two table for the specified class_id.
@@ -130,14 +257,16 @@ class UserDataManager:
         """
         Returns all students assigned to the given class_id, including first_name, last_name, student_id, and course.
         """
-        q = '''
+        q = (
+            """
             SELECT s.student_id, u.first_name, u.last_name, s.course
             FROM students s
             JOIN users u ON s.user_id = u.id
             JOIN class_students_two cs ON s.student_id = cs.student_id
             WHERE cs.class_id = %s AND u.active = 1
             ORDER BY u.last_name ASC, u.first_name ASC
-        '''
+            """
+        )
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -146,19 +275,6 @@ class UserDataManager:
         except Exception as e:
             print(f"[ERROR] Failed to fetch students for class {class_id}: {e}")
             return []
-    def delete_face_embeddings(self, student_id) -> None:
-        """
-        Delete all face embeddings for the given student_id from the face_embeddings table.
-        """
-        q = "DELETE FROM face_embeddings WHERE student_id=%s"
-        try:
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(q, (student_id,))
-                conn.commit()
-        except Exception as e:
-            print(f"[ERROR] Failed to delete embeddings for student_id {student_id}: {e}")
-            raise
     def mark_absent_students_for_session(self, session_id: int, present_student_ids: list) -> None:
         """
         For the given attendance session, mark all students assigned to the class as absent except those in present_student_ids.
@@ -259,7 +375,8 @@ class UserDataManager:
         :param file_path: The path to save the CSV file
         """
         import csv
-        q = '''
+        q = (
+            """
             SELECT ar.session_id, ar.present_at, ar.confidence, c.class_name, ats.name AS session_name, ats.started_at, ats.ended_at, l.first_name AS lecturer_first_name, l.last_name AS lecturer_last_name
             FROM attendance_records_two ar
             LEFT JOIN attendance_sessions_two ats ON ar.session_id = ats.id
@@ -267,7 +384,8 @@ class UserDataManager:
             LEFT JOIN lecturers_table_two l ON ats.lecturer_id = l.lecturer_id
             WHERE ar.student_id = %s
             ORDER BY ar.present_at DESC
-        '''
+            """
+        )
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -289,7 +407,8 @@ class UserDataManager:
         Returns all face embeddings for students assigned to the given class_id and who are active.
         Each row is a dict with keys: 'student_id', 'embedding'.
         """
-        q = '''
+        q = (
+            """
             SELECT fe.student_id, fe.embedding
             FROM face_embeddings fe
             JOIN students s ON fe.student_id = s.student_id
@@ -297,7 +416,8 @@ class UserDataManager:
             JOIN class_students_two cs ON s.student_id = cs.student_id
             WHERE cs.class_id = %s AND u.active = 1
             ORDER BY fe.student_id ASC, fe.created_at DESC
-        '''
+            """
+        )
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -1252,6 +1372,38 @@ class UserDataManager:
                 print(f"Failed to send attendance email: {e}")
         except Exception:
             raise
+
+    def get_attendance_summary_per_class(self, student_id: str) -> list:
+        """
+        Returns a list of dicts: [{class_id, class_name, total_sessions, attended_sessions, attendance_percentage}]
+        """
+        q = (
+            """
+            SELECT
+                c.id AS class_id,
+                c.class_name,
+                COUNT(DISTINCT ats.id) AS total_sessions,
+                COUNT(DISTINCT CASE WHEN ar.present_at IS NOT NULL THEN ats.id END) AS attended_sessions,
+                ROUND(
+                    100.0 * COUNT(DISTINCT CASE WHEN ar.present_at IS NOT NULL THEN ats.id END) /
+                    NULLIF(COUNT(DISTINCT ats.id), 0), 2
+                ) AS attendance_percentage
+            FROM classes_two c
+            JOIN class_students_two cs ON cs.class_id = c.id
+            JOIN attendance_sessions_two ats ON ats.class_id = c.id
+            LEFT JOIN attendance_records_two ar ON ar.session_id = ats.id AND ar.student_id = %s
+            WHERE cs.student_id = %s
+            GROUP BY c.id, c.class_name
+            """
+        )
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(q, (student_id, student_id))
+                    return cur.fetchall()
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch attendance summary for student {student_id}: {e}")
+            return []
 
 def get_attendance_for_session(self, session_id: int) -> List[Dict[str, Any]]:
         """

@@ -611,11 +611,14 @@ class DashboardFrame(tk.Frame):
         # Dialog to assign students to a class (modern flow)
 
         # Dialog to assign students to a class (modern flow)
-        dlg = tk.Toplevel(self)
-        dlg.title("Assign Students to Class")
-        dlg.geometry("520x420")
-        dlg.transient(self)
-        dlg.grab_set()
+        if self.winfo_exists():
+            dlg = tk.Toplevel(self)
+            dlg.title("Assign Students to Class")
+            dlg.geometry("520x420")
+            dlg.transient(self)
+            dlg.grab_set()
+        else:
+            return
 
         # Fetch classes
         try:
@@ -769,13 +772,30 @@ class DashboardFrame(tk.Frame):
         btn_frame = tk.Frame(frame, bg="#ffffff")
         tk.Button(btn_frame, text="Toggle Active", command=self.toggle_active).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Edit Selected", command=self.edit_user).pack(side="left", padx=6)
-        tk.Button(btn_frame, text="Capture Face", command=self.capture_face_for_selected).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Re-Capture Face", command=self.capture_face_for_selected).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Refresh", command=lambda: self.load_users(limit=20)).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Assign to Class", command=self.assign_students_to_class_dialog, width=16).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Reset Password", command=self.reset_student_password, width=16).pack(side="left", padx=6)
         btn_frame.pack(pady=12)
 
         # 🔑 Load first 20 users at startup
         self.load_users(limit=20)
+
+    def reset_student_password(self):
+        sel = self.users_tree.selection()
+        if not sel:
+            messagebox.showwarning("No selection", "Please select a user to reset password.")
+            return
+        item = sel[0]
+        vals = self.users_tree.item(item, "values")
+        student_id = vals[0]
+        try:
+            self.user_manager.reset_student_password_and_email(student_id)
+            messagebox.showinfo("Reset", "Password reset. The new password has been emailed to the student.")
+        except AttributeError as e:
+            messagebox.showerror("Missing DB Method", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to reset password: {e}")
 
     def capture_face_for_selected(self):
         sel = self.users_tree.selection()

@@ -1,0 +1,183 @@
+Facial Recognition Attendance System: User Manual
+
+---
+
+Table of Contents
+1. Introduction
+2. System Overview
+3. Student Web Portal
+4. Lecturer Web Portal
+5. Admin App (Desktop)
+6. Lecturer Application (Desktop)
+6. Face Registration Process
+7. Attendance Process
+8. Email Notifications
+9. Troubleshooting & Support
+10. FAQ
+
+---
+
+1. Introduction
+This manual guides users through the features and usage of the Facial Recognition Attendance System, including the Student Web Portal, Lecturer Web Portal, Admin App (Desktop), and Lecturer Application (Desktop).
+
+2. System Overview
+- The system automates attendance using facial recognition.
+- Students interact via the Student Web Portal.
+- Lecturers use the Lecturer Web Portal and Lecturer Application (Desktop).
+- Admins use the Admin App (Desktop) for management and session control.
+- Attendance records are stored securely and notifications are sent via email.
+
+3. Student Dashboard (Web)
+Student Web Portal
+- Access via provided URL (see your institution's IT department).
+- Login with your student credentials.
+- View your attendance records, notifications, and schedule.
+- Update your profile and settings as needed.
+
+4. Lecturer/Admin Dashboard (Web)
+Lecturer Web Portal
+- Access via provided URL.
+- Login with your lecturer credentials.
+- View and manage class attendance, notifications, and upcoming sessions.
+- Download attendance reports and manage student lists.
+
+5. Admin/Lecturer Desktop GUI (Tkinter)
+Admin App (Desktop)
+- Launch the Admin App (usually via `python gui.py` or shortcut).
+- Login as admin.
+- Register new users (students/lecturers) and manage user data.
+- View logs and system status.
+
+Lecturer Application (Desktop)
+- Launch the Lecturer Application (usually via `python lec_main.py` or shortcut).
+- Login as lecturer.
+- Start or end attendance sessions.
+- Register new faces (students/staff) using the camera.
+- Monitor attendance and send notifications.
+
+6. Face Registration Process
+Open the face registration module in the Student Web Portal, Lecturer Web Portal, Admin App, or Lecturer Application.
+- Follow on-screen instructions to capture face images.
+- Ensure good lighting and a clear view of the face.
+- Confirm registration; the system will store your facial embedding.
+
+7. Attendance Process
+- During class/session, students approach the camera for automatic attendance marking.
+- The system matches faces and records attendance.
+Lecturers can monitor attendance in real-time via the Lecturer Web Portal or Lecturer Application.
+
+8. Email Notifications
+- At session end, batch emails are sent to present and absent students.
+- Check your inbox for attendance notifications.
+If you do not receive an email, check your spam folder or contact support.
+
+9. Troubleshooting & Support
+- If face recognition fails, ensure proper lighting and camera position.
+- For login issues, use the password reset feature or contact admin.
+- For email issues, verify your registered email address.
+- For technical support, contact your institution's IT helpdesk.
+
+10. FAQ
+Q: How do I register my face?
+A: Use the face registration module in the dashboard or desktop GUI and follow instructions.
+
+Q: What if my attendance is not recorded?
+A: Contact your lecturer/admin to verify your registration and session status.
+
+Q: How do I reset my password?
+A: Use the password reset option on the login page or contact admin.
+
+Q: Who can access attendance records?
+A: Only authorized lecturers, admins, and the student themselves.
+
+---
+End of User Manual
+
+---
+
+11. Step-by-Step Guides
+
+Student Web Portal: Logging In and Viewing Attendance
+1. Open the Student Web Portal URL in your browser.
+2. Enter your student ID and password.
+3. Navigate to 'Attendance Records' to view your history.
+4. Check 'Notifications' for session updates and emails.
+5. Update your profile under 'Settings' if needed.
+
+Lecturer Web Portal: Managing a Session
+1. Log in to the Lecturer Web Portal.
+2. Start a new attendance session from the portal.
+3. Monitor real-time attendance as students check in.
+4. End the session to trigger batch email notifications.
+5. Download attendance reports as needed.
+
+Lecturer Application (Desktop): Managing a Session
+1. Launch the Lecturer Application and log in.
+2. Start a new attendance session.
+3. Monitor real-time attendance as students check in.
+4. End the session to trigger batch email notifications.
+5. Download attendance reports as needed.
+
+Admin App (Desktop): Registering a New User
+1. Launch the Admin App and log in.
+2. Select 'Add New User' and choose role (student/lecturer).
+3. Enter user details and capture face images.
+4. Confirm registration and verify embedding.
+5. Manage users from the Admin App.
+
+---
+
+12. Error Messages & Solutions
+
+- "Face not recognized": Ensure proper lighting, clean camera lens, and face is unobstructed. Retry registration if persistent.
+- "Login failed": Check credentials, reset password if forgotten, or contact admin.
+- "Email not received": Verify email address, check spam folder, or contact support.
+- "Session not found": Confirm session start/end times with lecturer/admin.
+
+---
+
+13. Security & Privacy
+
+- All facial data is encrypted and stored securely.
+- Only authorized users can access attendance and personal records.
+- Passwords are hashed; use strong passwords and change them regularly.
+- Do not share login credentials.
+
+---
+
+14. Data Management
+
+- Attendance records can be exported as CSV by lecturers/admins.
+- Data import for bulk user registration is available via admin tools.
+- Regular backups are recommended for institutional admins.
+
+---
+
+15. Password Reset & Account Recovery
+
+- Use the 'Forgot Password' link on the login page.
+- Enter your registered email to receive a reset link.
+- If you do not receive the link, contact your admin for manual reset.
+
+---
+
+16. Glossary
+
+- Embedding: A mathematical representation of a face used for recognition.
+- Session: A scheduled class or event where attendance is tracked.
+- Student Web Portal: The web interface for students to view attendance and notifications.
+- Lecturer Web Portal: The web interface for lecturers to manage sessions and attendance.
+- Admin App: Desktop application for admin management.
+- Lecturer Application: Desktop application for lecturer session management.
+
+---
+
+17. Support & Escalation
+
+- For technical issues, contact your institution's IT helpdesk first.
+- For urgent issues (e.g., data loss, security breach), escalate to system administrator.
+- Provide error logs or screenshots when reporting issues.
+
+---
+
+End of Comprehensive User Manual

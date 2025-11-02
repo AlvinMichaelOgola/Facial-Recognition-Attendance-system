@@ -1,0 +1,269 @@
+---
+
+Major Features: Lecturer & Admin Dashboards
+-------------------------------------------
+
+1. Lecturer Dashboard
+---------------------
+**Class Management (Major Feature)**
+- View all classes assigned to the lecturer.
+- Create, edit, or delete classes/sessions (set name, date, time, location).
+- Assign or remove students from classes.
+- View class rosters (list of enrolled students).
+- Start and end attendance sessions for each class.
+
+**Attendance Reporting & Analytics (Major Feature)**
+- View detailed attendance records for each class/session.
+- Filter attendance by date, student, or class.
+- Visualize attendance trends with charts (e.g., attendance rate over time).
+- Download/export attendance reports as CSV or PDF.
+- See summary statistics (e.g., average attendance, students with low attendance).
+
+**Notifications & Communication**
+- Receive system notifications (e.g., session reminders, attendance alerts).
+- Send announcements/messages to students in a class.
+
+**Profile & Settings**
+- Update personal information (name, email, phone, password).
+- Set notification preferences.
+
+**Support & Help**
+- Access help resources or contact support.
+
+2. Admin Dashboard
+------------------
+**User & Class Management (Major Feature)**
+- Manage all users (students, lecturers, admins): add, edit, deactivate, or delete accounts.
+- Register new students and lecturers, including face registration.
+- Create, edit, or delete any class/session.
+- Assign students and lecturers to classes.
+- View and manage class rosters and assignments.
+
+**Attendance Oversight & Reporting (Major Feature)**
+- View and audit attendance records for all classes and users.
+- Generate and export comprehensive attendance reports (CSV/PDF).
+- Monitor attendance trends and identify issues (e.g., chronic absenteeism).
+
+**System Configuration & Security**
+- Configure system-wide settings (e.g., session times, notification templates).
+- Manage roles and permissions.
+- Oversee data backups and system logs.
+
+**Notifications & Communication**
+- Send system-wide announcements or targeted messages.
+- Receive alerts for system events or errors.
+
+**Support & Help**
+- Access advanced help resources or escalate to IT support.
+
+---
+---
+
+System Workflows
+----------------
+
+This section describes the main workflows for users and the system, illustrating how the components interact to deliver the facial recognition attendance solution.
+
+1. Student Registration Workflow
+--------------------------------
+- Admin opens the Admin App (gui.py) and selects 'Add Student'.
+- Admin enters student details and registers the student.
+- The system saves the student in the database and prompts for face capture.
+- Admin launches face capture (add_faces.py), which stores the student's facial embedding.
+- Student is now registered and can be assigned to classes.
+
+2. Lecturer Registration Workflow
+---------------------------------
+- Admin opens 'Manage Lecturers' in the Admin App.
+- Admin creates a new lecturer, entering all required details.
+- Lecturer is saved in the database and can be assigned to classes.
+
+3. Class Creation and Assignment Workflow
+-----------------------------------------
+- Admin or lecturer creates a new class/session via the Admin App or Lecturer Web Portal.
+- Class details (name, date, time, room, lecturer) are saved in the database.
+- Students and lecturers are assigned to the class as needed.
+
+4. Attendance Session Workflow
+-----------------------------
+- Lecturer starts an attendance session via the Lecturer Application or Web Portal.
+- Students approach the camera; the system captures and recognizes faces in real time.
+
+Table of Contents
+-----------------
+1. Project Overview
+2. Technology Stack
+	2.1 Backend
+	2.2 Frontend
+	2.3 Database
+	2.4 Email & Notification
+	2.5 Testing
+	2.6 Deployment
+3. Major Files Detailed
+	3.1 gui.py
+	3.2 user_data_manager.py (suggested next)
+	...
+4. System Workflows
+	4.1 Student Registration
+	4.2 Lecturer Registration
+	4.3 Class Creation & Assignment
+	4.4 Attendance Session
+	4.5 User Management
+	4.6 Reporting
+	4.7 Error Handling & Support
+5. Security & Privacy
+6. Testing & Quality Assurance
+7. Glossary
+8. Appendix
+
+---
+
+1. Project Overview
+-------------------
+This system automates classroom attendance using facial recognition, providing web portals and desktop applications for students, lecturers, and administrators. It integrates real-time recognition, secure data management, batch email notifications, and modern UI/UX for all user roles.
+
+2. Technology Stack
+-------------------
+**2.1 Backend:** Python 3, Flask, SQLite, SMTP, threading, facial recognition libraries (OpenCV, FaceNet)
+**2.2 Frontend:** React, Vite, TypeScript, Tailwind CSS
+**2.3 Database:** SQLite, CSV exports, SQL setup scripts
+**2.4 Email & Notification:** SMTP (batch, threaded)
+**2.5 Testing:** Python unittest, test images
+**2.6 Deployment:** Windows OS, PowerShell, requirements.txt, package.json
+
+3. Major Files Detailed
+----------------------
+3.1 gui.py — Admin App (Tkinter GUI) for Facial Recognition Attendance System
+	- Purpose: Implements the Admin App, a desktop GUI for administrators to manage students, lecturers, classes, and attendance using Tkinter. Provides user-friendly interfaces for registration, editing, class/session management, and face capture, integrating with the backend database and facial recognition modules.
+	- Key Classes and Functions: Application, LoginFrame, DashboardFrame, Student Management, Lecturer Management, Class/Session Management, Attendance and Reports, Dialog Classes, Utility Functions.
+	- Integration and Flow: All data operations are performed via the UserDataManager and DatabaseManager classes. Face capture is handled by launching add_faces.py as a subprocess. The GUI is event-driven, with robust error handling and modular design.
+	- Security Notes: Passwords are currently checked in plaintext for MVP; production should use hashing. Only authenticated admins can access the dashboard and management features. All database operations are wrapped in try/except blocks for safety.
+3.2 user_data_manager.py (suggested next)
+	- [Add similar breakdown for each major file.]
+
+4. System Workflows
+-------------------
+4.1 Student Registration Workflow
+	1. Admin opens the Admin App (gui.py) and selects 'Add Student'.
+	2. Admin enters student details and registers the student.
+	3. The system saves the student in the database and prompts for face capture.
+	4. Admin launches face capture (add_faces.py), which stores the student's facial embedding.
+	5. Student is now registered and can be assigned to classes.
+4.2 Lecturer Registration Workflow
+	1. Admin opens 'Manage Lecturers' in the Admin App.
+	2. Admin creates a new lecturer, entering all required details.
+	3. Lecturer is saved in the database and can be assigned to classes.
+4.3 Class Creation and Assignment Workflow
+	1. Admin or lecturer creates a new class/session via the Admin App or Lecturer Web Portal.
+	2. Class details (name, date, time, room, lecturer) are saved in the database.
+	3. Students and lecturers are assigned to the class as needed.
+4.4 Attendance Session Workflow
+	1. Lecturer starts an attendance session via the Lecturer Application or Web Portal.
+	2. Students approach the camera; the system captures and recognizes faces in real time.
+	3. Recognized students are marked present in the database.
+	4. At session end, the lecturer ends the session.
+	5. The system sends batch email notifications to present and absent students.
+4.5 User Management Workflow
+	1. Admin can view, edit, activate/deactivate, or delete students and lecturers via the Admin App.
+	2. Admin can reset passwords and re-capture faces as needed.
+4.6 Reporting Workflow
+	1. Admin or lecturer can export attendance records as CSV for reporting or backup.
+4.7 Error Handling and Support Workflow
+	1. All errors (e.g., failed recognition, DB issues) are logged and shown to the user.
+	2. Users are provided with clear messages and support escalation paths.
+
+5. Security & Privacy
+---------------------
+- Authentication: Passwords hashed and checked via `admin_security_manager.py`.
+- Access Control: Only authorized users can access sensitive data.
+- Data Protection: Facial data and attendance records stored securely; emails sent only to registered addresses.
+
+6. Testing & Quality Assurance
+------------------------------
+- Unit Tests: `tests/` directory contains facial recognition tests and sample images.
+- Error Logging: All errors logged for debugging and audit.
+
+7. Glossary
+-----------
+- Embedding: A mathematical representation of a face used for recognition.
+- Session: A scheduled class or event where attendance is tracked.
+- Student Web Portal: The web interface for students to view attendance and notifications.
+- Lecturer Web Portal: The web interface for lecturers to manage sessions and attendance.
+- Admin App: Desktop application for admin management.
+- Lecturer Application: Desktop application for lecturer session management.
+
+8. Appendix
+-----------
+- For further details on any module or technology, see the corresponding source files or request a deeper technical breakdown.
+
+**Lecturer Web Portal (academe-view-suite):**
+- Dashboard widgets (`AttendanceChart.tsx`, `AttendanceTable.tsx`), UI components, pages, API utilities, and custom hooks.
+
+5. Desktop Applications
+-----------------------
+**Tkinter:** Python’s standard GUI library, chosen for its simplicity and cross-platform support. Used for the Admin App (`gui.py`) and Lecturer Application (`lec_main.py`).
+- Admin App: User management, face registration, logs.
+- Lecturer Application: Session control, real-time attendance, batch email notifications, progress bar.
+
+6. Database Design
+------------------
+**SQLite:**
+- Stores users, attendance, session data in a single file (`attendance.db`).
+- Tables created via SQL scripts in `set_up scripts/`.
+- Attendance records exported as CSV for reporting and backup.
+
+7. Facial Recognition
+---------------------
+- **Image Capture:** OpenCV captures images from webcam.
+- **Embedding:** FaceNet or similar models generate embeddings stored in the database.
+- **Recognition:** `face_recognizer.py` matches live faces to stored embeddings.
+- **Error Handling:** Logs errors to `face_capture_errors.log` and provides user feedback in GUIs.
+
+8. Email Notification System
+----------------------------
+- **SMTP:** Used for sending attendance notifications.
+- **Batch Sending:** All emails for a session sent in one batch for efficiency.
+- **Threading:** Email sending runs in background threads to keep UI responsive.
+- **Deduplication:** Ensures each student receives only one email per session.
+- **Progress Bar:** GUI shows real-time progress during email sending.
+- **Error Logging:** All errors logged and displayed to user.
+
+9. Security & Privacy
+---------------------
+- **Authentication:** Passwords hashed and checked via `admin_security_manager.py`.
+- **Access Control:** Only authorized users can access sensitive data.
+- **Data Protection:** Facial data and attendance records stored securely; emails sent only to registered addresses.
+
+10. Testing & Quality Assurance
+-------------------------------
+- **Unit Tests:** `tests/` directory contains facial recognition tests and sample images.
+- **Error Logging:** All errors logged for debugging and audit.
+
+11. Integration & Workflow
+--------------------------
+- **Student Web Portal:** Students view attendance, notifications, and update profiles.
+- **Lecturer Web Portal:** Lecturers manage sessions, monitor attendance, and download reports.
+- **Admin App:** Admins register users, manage data, and view logs.
+- **Lecturer Application:** Lecturers run sessions, trigger recognition, and send emails.
+- **APIs:** Flask endpoints connect frontend portals to backend logic.
+
+12. Deployment & Environment
+----------------------------
+- **OS:** Developed and deployed on Windows.
+- **Shell:** PowerShell used for running scripts and apps.
+- **Python Environment:** Managed via `requirements.txt`.
+- **Node Environment:** Managed via `package.json` for React apps.
+
+13. Rationale for Technology Choices
+------------------------------------
+- **Python:** Rapid prototyping, strong ML support, easy integration with facial recognition.
+- **Flask:** Lightweight, easy to extend, perfect for REST APIs.
+- **SQLite:** No server required, fast for small/medium datasets, easy backup/export.
+- **React + Vite + TypeScript:** Modern, maintainable, scalable frontend stack.
+- **Tailwind CSS:** Fast, consistent UI development.
+- **Tkinter:** Simple desktop GUIs for admin/lecturer workflows.
+- **SMTP:** Reliable, standard for email notifications.
+
+---
+
+This documentation provides a detailed overview of all technologies, their roles, and how they are integrated in the Facial Recognition Attendance System. For further details on any module or technology, see the corresponding source files or request a deeper technical breakdown.

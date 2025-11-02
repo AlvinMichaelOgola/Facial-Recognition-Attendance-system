@@ -335,12 +335,45 @@ class LecturerApp(tb.Window):
         except Exception as e:
             logging.error(f"Failed to mark absent students: {e}")
 
-        # Clear UI back to placeholder
+
+
+
+        # Show status label and progress bar while sending emails
         for widget in self.preview_container.winfo_children():
             widget.destroy()
-        tb.Label(self.preview_container, text="Session ended. You may start another session.", font=("Segoe UI", 11)).pack(pady=20)
+        status_label = tb.Label(self.preview_container, text="Sending attendance emails...", font=("Segoe UI", 11))
+        status_label.pack(pady=(20, 10))
+        progress = ttk.Progressbar(self.preview_container, orient="horizontal", length=400, mode="determinate")
+        progress.pack(pady=(0, 20))
 
-        messagebox.showinfo("Session Ended", "Attendance session ended and attendance flushed.")
+        def send_emails_bg():
+            errors = []
+            total = [0]
+            current = [0]
+
+            def progress_callback(cur, tot):
+                current[0] = cur
+                total[0] = tot
+                self.after(0, lambda: progress.config(maximum=tot, value=cur))
+
+            try:
+                self.db.send_present_attendance_emails(self.session_id, progress_callback=progress_callback)
+            except Exception as e:
+                errors.append(f"Failed to send present attendance emails: {e}")
+                logging.error(errors[-1])
+            try:
+                self.db.send_absent_attendance_emails(self.session_id, progress_callback=progress_callback)
+            except Exception as e:
+                errors.append(f"Failed to send absent attendance emails: {e}")
+                logging.error(errors[-1])
+            # Update UI after sending
+            def update_ui():
+                status_label.config(text="Session ended. You may start another session.")
+                progress.pack_forget()
+                messagebox.showinfo("Session Ended", "Attendance session ended and attendance flushed. Emails sent to all students." + ("\nErrors: " + str(errors) if errors else ""))
+            self.after(100, update_ui)
+
+        threading.Thread(target=send_emails_bg, daemon=True).start()
 
     # ---------------- Reset Session ----------------
     def reset_session(self):

@@ -4,6 +4,62 @@ from io import BytesIO
 from PIL import Image
 """
 student_dashboard_api.py
+Flask API for student dashboard endpoints.
+Connects frontend dashboard to the database using UserDataManager.
+"""
+
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from user_data_manager import UserDataManager
+import os
+from email_utils import send_email
+
+
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+udm = UserDataManager()
+
+# ...existing endpoints...
+
+# Email attendance CSV to student
+@app.route('/api/student/attendance/email_csv', methods=['POST'])
+def email_attendance_csv():
+    data = request.get_json()
+    student_id = data.get('student_id')
+    if not student_id:
+        return jsonify({'error': 'student_id required'}), 400
+    student = udm.get_student(student_id)
+    if not student:
+        return jsonify({'error': 'Student not found'}), 404
+    email = student.get('email')
+    if not email:
+        return jsonify({'error': 'No email found for student'}), 404
+    file_path = f'tmp/{student_id}_attendance.csv'
+    os.makedirs('tmp', exist_ok=True)
+    udm.download_attendance_csv(student_id, file_path)
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            csv_content = f.read()
+        subject = "Your Attendance Records (CSV)"
+        body = f"""
+        <html><body>
+        <h2>Your Attendance Records</h2>
+        <p>Dear {student.get('first_name', '')},</p>
+        <p>Attached is your attendance record in CSV format.</p>
+        <pre>{csv_content}</pre>
+        <br><p>Best regards,<br>Attendance System Team</p>
+        </body></html>
+        """
+        send_email(email, subject, body, html=True)
+        return jsonify({'success': True, 'message': 'Attendance CSV sent to your email.'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to send email: {str(e)}'}), 500
+import base64
+from flask import send_file, make_response
+from io import BytesIO
+from PIL import Image
+"""
+student_dashboard_api.py
 
 Flask API for student dashboard endpoints.
 Connects frontend dashboard to the database using UserDataManager.
@@ -17,7 +73,7 @@ import os
 
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 udm = UserDataManager()
 
 # Upload student profile photo (BLOB)
@@ -104,6 +160,7 @@ def update_profile():
     # Only allow updating certain fields
     allowed_user_fields = ['email', 'phone']
     user_updates = {k: v for k, v in data.items() if k in allowed_user_fields and v is not None}
+    
     # You can add more allowed fields as needed
     if not user_updates:
         return jsonify({'error': 'No valid fields to update'}), 400
@@ -199,6 +256,14 @@ def change_student_password():
         return jsonify({'success': True, 'message': 'Password updated successfully'})
     except Exception as e:
         return jsonify({'error': f'Failed to update password: {str(e)}'}), 500
+
+@app.route('/api/student/attendance/summary', methods=['GET'])
+def get_attendance_summary():
+    student_id = request.args.get('student_id')
+    if not student_id:
+        return jsonify({'error': 'student_id required'}), 400
+    summary = udm.get_attendance_summary_per_class(student_id)
+    return jsonify(summary)
 
 if __name__ == '__main__':
     app.run(debug=True)
