@@ -74,10 +74,39 @@ class EditUserDialog(tk.Toplevel):
             ("Year of Study", "year_of_study"),
         ]
         self.vars = {}
+        course_options = [
+            "Bachelor of Science in Tourism Management (BTM)",
+            "Bachelor of Science in Hospitality Management (BHM)",
+            "Bachelor of Business Science: Financial Engineering (BBSFENG)",
+            "Bachelor of Business Science: Financial Economics (BBSFE)",
+            "Bachelor of Business Science: Actuarial Science (BBSACT)",
+            "Bachelor Of Science In Informatics And Computer Science (BICS)",
+            "Bachelor Of Business Information Technology (BBIT)",
+            "BSc. Computer Networks and Cyber Security (BCNS)",
+            "Bachelor of Laws (LLB)",
+            "Bachelor of Arts in Communication (BAC)",
+            "Bachelor of Arts in International Studies",
+            "Bachelor of Arts in Development Studies and Philosophy (BDP)",
+            "Bachelor of Science in Supply Chain and Operations Management (BSCM)",
+            "Bachelor of Financial Services (BFS)",
+            "Bachelor Of Science In Electrical and Electronics Engineering (BSEEE)",
+            "BSc in Statistics and Data Science (BScSDS)",
+            "Bachelor of Commerce (BCOM)"
+        ]
+        year_options = [str(y) for y in range(1, 6)]
         for i, (label, key) in enumerate(fields):
             tk.Label(self, text=label+":").grid(row=i, column=0, sticky="e", padx=8, pady=4)
             sv = tk.StringVar(value=user.get(key, ""))
-            tk.Entry(self, textvariable=sv, width=32).grid(row=i, column=1, padx=8, pady=4)
+            if key == "course":
+                from tkinter import ttk
+                course_combo = ttk.Combobox(self, textvariable=sv, values=course_options, state="readonly", width=32)
+                course_combo.grid(row=i, column=1, padx=8, pady=4)
+            elif key == "year_of_study":
+                from tkinter import ttk
+                year_combo = ttk.Combobox(self, textvariable=sv, values=year_options, state="readonly", width=32)
+                year_combo.grid(row=i, column=1, padx=8, pady=4)
+            else:
+                tk.Entry(self, textvariable=sv, width=32).grid(row=i, column=1, padx=8, pady=4)
             self.vars[key] = sv
 
         btn_frame = tk.Frame(self)
@@ -529,6 +558,7 @@ class DashboardFrame(tk.Frame):
         }
         country_codes = ['+254', '+1', '+44', '+91', '+61', '+81', '+49', '+33', '+86', '+27']
         country_code_var = tk.StringVar(value='+254')
+        year_options = [str(y) for y in range(1, 6)]
         for i, (label, key) in enumerate(fields):
             required = key in ["first_name", "last_name", "email", "course", "year_of_study"]
             label_widget = tk.Label(form, text=label + ("*" if required else "") + ":", bg="#ffffff")
@@ -539,6 +569,10 @@ class DashboardFrame(tk.Frame):
                 from tkinter import ttk
                 course_combo = ttk.Combobox(form, textvariable=sv, values=course_options, state="readonly", width=36)
                 course_combo.grid(row=i, column=1, pady=6, padx=6)
+            elif key == "year_of_study":
+                from tkinter import ttk
+                year_combo = ttk.Combobox(form, textvariable=sv, values=year_options, state="readonly", width=36)
+                year_combo.grid(row=i, column=1, pady=6, padx=6)
             elif key == "phone":
                 from tkinter import ttk
                 phone_frame = tk.Frame(form, bg="#ffffff")
@@ -1347,17 +1381,17 @@ class DashboardFrame(tk.Frame):
         tk.Button(control_frame, text="Assign Students", command=self.assign_students_to_class_dialog).pack(side="left", padx=6)
         tk.Button(control_frame, text="Refresh", command=self.load_classes).pack(side="left", padx=6)
 
-        columns = ("class_id", "cohort_id", "class_name", "code")
+        columns = ("class_name", "room", "lecturer_name", "student_count")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
         col_widths = {
-            "class_id": 90,
-            "cohort_id": 120,
-            "class_name": 160,
-            "code": 100
+            "class_name": 180,
+            "room": 100,
+            "lecturer_name": 180,
+            "student_count": 120
         }
         for col in columns:
             tree.heading(col, text=col.replace("_", " ").title())
-            tree.column(col, width=col_widths.get(col, 100), anchor="center")
+            tree.column(col, width=col_widths.get(col, 120), anchor="center")
         tree.pack(fill="both", expand=True, pady=(8, 8))
         self.classes_tree = tree
 
@@ -1380,11 +1414,14 @@ class DashboardFrame(tk.Frame):
             return
 
         for c in classes:
-            class_id = c.get("class_id") or c.get("id")
-            cohort_id = c.get("cohort_id")
             class_name = c.get("class_name")
-            code = c.get("code")
-            self.classes_tree.insert("", "end", values=(class_id, cohort_id, class_name, code))
+            room = c.get("room", "")
+            lecturer_name = c.get("lecturer_name")
+            if not lecturer_name:
+                lecturer_id = c.get("lecturer_id")
+                lecturer_name = str(lecturer_id) if lecturer_id else ""
+            student_count = c.get("student_count", 0)
+            self.classes_tree.insert("", "end", values=(class_name, room, lecturer_name, student_count))
 
 
     def edit_class_dialog(self):
@@ -1394,40 +1431,52 @@ class DashboardFrame(tk.Frame):
             return
         item = sel[0]
         vals = self.classes_tree.item(item, "values")
-        class_id = vals[0]
-        course_id = vals[1]
-        year = vals[2]
-        semester = vals[3]
+        class_name = vals[0]
+        room = vals[1]
+        lecturer_name = vals[2]
+
+        # Find the class_id by matching class_name, room, and lecturer_name
+        try:
+            classes = safe_call(self.user_manager, "get_classes")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to fetch class details: {e}")
+            return
+        class_id = None
+        for c in classes:
+            if c.get("class_name") == class_name and str(c.get("room", "")) == str(room) and str(c.get("lecturer_name", "")) == str(lecturer_name):
+                class_id = c.get("id") or c.get("class_id")
+                break
+        if not class_id:
+            messagebox.showerror("Error", "Could not determine class ID for editing.")
+            return
 
         dlg = tk.Toplevel(self)
         dlg.title("Edit Class")
-        dlg.geometry("340x260")
+        dlg.geometry("340x200")
         dlg.transient(self)
         dlg.grab_set()
 
         form = tk.Frame(dlg, padx=12, pady=12)
         form.pack(fill="both", expand=True)
 
-        fields = [
-            ("Course ID", "course_id", course_id),
-            ("Year", "year", year),
-            ("Semester", "semester", semester)
-        ]
-        vars = {}
-        for i, (label, key, initial) in enumerate(fields):
-            tk.Label(form, text=label+":").grid(row=i, column=0, sticky="e", pady=6, padx=6)
-            sv = tk.StringVar(value=initial)
-            tk.Entry(form, textvariable=sv, width=24).grid(row=i, column=1, pady=6, padx=6)
-            vars[key] = sv
+        tk.Label(form, text="Class Name:").grid(row=0, column=0, sticky="e", pady=6, padx=6)
+        class_name_var = tk.StringVar(value=class_name)
+        tk.Entry(form, textvariable=class_name_var, width=28).grid(row=0, column=1, pady=6, padx=6)
+
+        tk.Label(form, text="Room:").grid(row=1, column=0, sticky="e", pady=6, padx=6)
+        room_var = tk.StringVar(value=room)
+        tk.Entry(form, textvariable=room_var, width=28).grid(row=1, column=1, pady=6, padx=6)
 
         def on_save():
-            class_data = {k: v.get().strip() for k, v in vars.items()}
-            if not class_data["course_id"] or not class_data["year"] or not class_data["semester"]:
-                messagebox.showerror("Validation", "All fields are required.")
+            new_name = class_name_var.get().strip()
+            new_room = room_var.get().strip()
+            if not new_name:
+                messagebox.showerror("Validation", "Class name cannot be empty.")
                 return
             try:
-                safe_call(self.user_manager, "update_class", class_id, class_data)
-                messagebox.showinfo("Saved", "Class updated.")
+                # Call a backend method to update both class name and room
+                safe_call(self.user_manager, "update_class_name_and_room", class_id, new_name, new_room)
+                messagebox.showinfo("Saved", "Class details updated.")
                 dlg.destroy()
                 self.load_classes()
             except AttributeError as e:
@@ -1436,7 +1485,7 @@ class DashboardFrame(tk.Frame):
                 messagebox.showerror("Error", f"Failed to update class: {e}")
 
         btns = tk.Frame(form)
-        btns.grid(row=len(fields), column=0, columnspan=2, pady=12)
+        btns.grid(row=2, column=0, columnspan=2, pady=12)
         tk.Button(btns, text="Save", command=on_save, width=12).pack(side="left", padx=6)
         tk.Button(btns, text="Cancel", command=dlg.destroy, width=12).pack(side="left", padx=6)
 

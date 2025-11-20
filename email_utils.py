@@ -58,12 +58,35 @@ SENDER_PASSWORD = 'pkyb knsp atnb rmip'
 # --- HTML Email Templates ---
 WELCOME_TEMPLATE = '''
 <html>
-<body>
-  <h2>Welcome to the Attendance System, {first_name}!</h2>
-  <p>Your account has been created. You can now access the system and mark your attendance.</p>
-  <p>If you have any questions, please contact your administrator.</p>
-  <br>
-  <p>Best regards,<br>Attendance System Team</p>
+<body style="font-family: Arial, sans-serif; background-color: #f8f9fa; margin:0; padding:0;">
+  <div style="background-color: #003366; color: #fff; padding: 20px; text-align: center;">
+    <h1 style="margin:0; font-size:2em;">RollCall FRS</h1>
+    <p style="margin:0; font-size:1.1em;">Facial Recognition Attendance System</p>
+  </div>
+  <div style="padding: 24px;">
+    <h2 style="color:#003366;">Welcome, {first_name}!</h2>
+    <p>We're excited to have you on board. Your account for <b>RollCall FRS</b> has been created. You can now log in and start marking your attendance with ease.</p>
+    <hr style="margin:20px 0;">
+    <p><b>Your login details:</b></p>
+    <ul>
+      <li><b>Email:</b> <span style="font-family: monospace;">{user_email}</span></li>
+      <li><b>Default Password:</b> <span style="font-family: monospace;">{default_password}</span></li>
+    </ul>
+    <p style="color: red;">Please change your password after your first login for security.</p>
+    <p><b>How to get started:</b></p>
+    <ol>
+      <li>Go to the RollCall FRS dashboard using the link below.</li>
+      <li>Log in with your email and default password.</li>
+      <li>Change your password from your profile settings.</li>
+      <li>Begin tracking your attendance!</li>
+    </ol>
+    
+    <hr style="margin:20px 0;">
+    <p>If you have any questions or need help, contact our support team at <a href="mailto:support@rollcallfrs.com">support@rollcallfrs.com</a>.</p>
+  </div>
+  <footer style="background-color:#e9ecef; color:#333; text-align:center; padding:12px; font-size:0.95em;">
+    &copy; {year} RollCall FRS. All rights reserved.
+  </footer>
 </body>
 </html>
 '''

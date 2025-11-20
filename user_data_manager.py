@@ -92,6 +92,24 @@ def verify_password(password: str, password_hash: str) -> bool:
 # UserDataManager
 # ----------------------
 class UserDataManager:
+    def update_class_name_and_room(self, class_id: int, new_name: str, new_room: str) -> None:
+        """
+        Update class_name and room for a class in classes_two table.
+        """
+        q = "UPDATE classes_two SET class_name=%s, room=%s WHERE id=%s"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, (new_name, new_room, class_id))
+                conn.commit()
+    def update_class_name(self, class_id: int, new_name: str) -> None:
+        """
+        Update only the class_name for a class in classes_two table.
+        """
+        q = "UPDATE classes_two SET class_name=%s WHERE id=%s"
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(q, (new_name, class_id))
+                conn.commit()
     def get_user_by_student_id(self, student_id: int) -> Optional[Dict[str, Any]]:
         """
         Return user row by joining students and users tables using student_id.
@@ -763,12 +781,14 @@ class UserDataManager:
                             cur.execute(q, params)
                         conn.commit()
                     from email_utils import WELCOME_TEMPLATE
+                    from datetime import datetime
                     subject = "Welcome to the Attendance System"
                     body = WELCOME_TEMPLATE.format(
                         first_name=user_dict.get('first_name', ''),
-                    ) + f"<p><b>Your login email:</b> {email}<br>"
-                    body += f"<b>Your temporary password:</b> {password_plain}</p>"
-                    body += "<p>Please log in and change your password after your first login.</p>"
+                        user_email=email,
+                        default_password=password_plain,
+                        year=datetime.now().year
+                    )
                     send_email(email, subject, body, html=True)
             except Exception as e:
                 print(f"Failed to send welcome email: {e}")
@@ -901,6 +921,7 @@ class UserDataManager:
         """
         Stores a pickled embedding (bytes) into face_embeddings.student_id column.
         embedding can be numpy array, list, etc., it will be pickled.
+        Embedding is normalized before saving.
         """
         # Only add embedding if user is active
         check_active_q = """
@@ -916,6 +937,10 @@ class UserDataManager:
                     if not row or not row.get('active'):
                         print(f"Embedding not added: student_id {student_id} is not active.")
                         return
+            # Normalize embedding before saving
+            import numpy as np
+            embedding = np.array(embedding)
+            embedding = embedding / np.linalg.norm(embedding)
             b = pickle.dumps(embedding)
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -1268,9 +1293,19 @@ class UserDataManager:
     # ------------------ Classes & Assignments ------------------
     def get_classes(self) -> List[Dict[str, Any]]:
         """
-        Return available classes (id, class_name, code, cohort_id) from classes_two
+        Return available classes (id, class_name, code, cohort_id, room, lecturer_id, lecturer_name, student_count) from classes_two.
+        Joins lecturers_table_two for lecturer_name and counts students from class_students_two.
         """
-        q = "SELECT id, class_name, code, cohort_id FROM classes_two ORDER BY class_name ASC"
+        q = """
+            SELECT c.id, c.class_name, c.code, c.cohort_id, c.room, c.lecturer_id,
+                   CONCAT(l.first_name, ' ', l.last_name) AS lecturer_name,
+                   (
+                       SELECT COUNT(*) FROM class_students_two cs WHERE cs.class_id = c.id
+                   ) AS student_count
+            FROM classes_two c
+            LEFT JOIN lecturers_table_two l ON c.lecturer_id = l.lecturer_id
+            ORDER BY c.class_name ASC
+        """
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -1283,6 +1318,8 @@ class UserDataManager:
     def assign_lecturer_to_classes(self, lecturer_identifier: Any, class_ids: Iterable[Any], admin_id: int = None) -> None:
         """
         Bulk assign classes to a lecturer. Replaces existing assignments.
+        Also updates classes_two. Unassigned classes will have lecturer_id set to NULL.
+        Checks that lecturer_id exists before assignment. Handles FK errors.
         lecturer_identifier: lecturers.id or users.id or lecturer_id string like 'L001'.
         class_ids: iterable of class ids (ints or string convertible).
         """
@@ -1291,19 +1328,38 @@ class UserDataManager:
             # Normalize class_ids to ints
             cids = [int(x) for x in class_ids]
 
+            print(f"[DEBUG] assign_lecturer_to_classes: lecturer_id={lecturer_id}, class_ids={cids}")
+
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Check if lecturer_id exists in lecturers_table_two
+                    cur.execute("SELECT COUNT(*) FROM lecturers_table_two WHERE lecturer_id=%s", (lecturer_id,))
+                    exists = cur.fetchone()[0]
+                    print(f"[DEBUG] lecturer_id exists in lecturers_table_two: {exists}")
+                    if not exists and cids:
+                        raise ValueError(f"Lecturer ID {lecturer_id} does not exist in lecturers_table_two.")
+
                     # Remove existing mappings
                     cur.execute("DELETE FROM lecturer_classes WHERE lecturer_id=%s", (lecturer_id,))
-                    # Insert new mappings
+                    # Set lecturer_id=NULL in classes_two for all classes previously assigned to this lecturer
+                    cur.execute("UPDATE classes_two SET lecturer_id=NULL WHERE lecturer_id=%s", (lecturer_id,))
+                    # Insert new mappings and update classes_two
                     if cids:
                         ins_q = "INSERT INTO lecturer_classes (lecturer_id, class_id) VALUES (%s, %s)"
                         for cid in cids:
                             cur.execute(ins_q, (lecturer_id, cid))
+                        # Set lecturer_id in classes_two for assigned classes (only if lecturer_id exists)
+                        print(f"[DEBUG] Updating classes_two: setting lecturer_id={lecturer_id} for class_ids={cids}")
+                        cur.execute(f"UPDATE classes_two SET lecturer_id=%s WHERE id IN ({','.join(['%s']*len(cids))})", tuple([lecturer_id] + cids))
                 conn.commit()
             if admin_id is not None:
                 self.log_admin_action(admin_id, "assign_lecturer_to_classes", {"lecturer_id": lecturer_id, "class_ids": cids})
-        except Exception:
+        except Exception as e:
+            # Provide clearer error for FK issues
+            if hasattr(e, 'args') and e.args and 'foreign key constraint fails' in str(e.args[1]).lower():
+                print(f"[ERROR] Foreign key constraint failed for lecturer_id={lecturer_id}, class_ids={cids}")
+                raise Exception("Failed to assign lecturer: The lecturer_id does not exist in lecturers_table_two or is invalid.")
+            print(f"[ERROR] Exception in assign_lecturer_to_classes: {e}")
             raise
 
     def get_lecturer_classes(self, lecturer_identifier: Any) -> List[Dict[str, Any]]:

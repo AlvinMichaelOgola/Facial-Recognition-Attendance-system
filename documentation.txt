@@ -122,6 +122,12 @@ Table of Contents
 -------------------
 This system automates classroom attendance using facial recognition, providing web portals and desktop applications for students, lecturers, and administrators. It integrates real-time recognition, secure data management, batch email notifications, and modern UI/UX for all user roles.
 
+For facial recognition, the system integrates OpenCV for real-time image capture and processing, complemented by advanced deep learning models such as FaceNet for generating unique facial embeddings, which are then used for accurate identification. The recognition pipeline uses MTCNN for robust face detection, ensuring that only high-quality, frontal faces are processed. Each detected face is converted into a normalized embedding using FaceNet, and these embeddings are compared against a database of stored embeddings using cosine similarity to identify individuals. The system employs smoothing and debouncing logic to stabilize recognition results across video frames, reducing false positives. All embeddings are securely stored in the database, and the recognition process is optimized for both speed and accuracy, supporting real-time attendance marking in classroom environments.
+
+There are more powerful, faster, and more accurate models available within the DeepFace library (such as ArcFace, VGGFace, and Dlib). However, due to hardware limitations, these could not be used effectively, as the CPU would struggle to keep up with real-time processing demands.
+
+The codebase is designed to support multiple DeepFace models, allowing for easy switching between FaceNet, ArcFace, and others by changing a configuration or parameter. During development, ArcFace and other models were tested, but FaceNet was selected as the default due to its balance of speed and accuracy on typical CPU hardware. The system can be reconfigured to use a different model if deployed on more capable hardware. Model selection and embedding normalization are handled in the recognition and face registration modules, ensuring consistent and reliable identification regardless of the chosen backend model.
+
 2. Technology Stack
 -------------------
 **2.1 Backend:** Python 3, Flask, SQLite, SMTP, threading, facial recognition libraries (OpenCV, FaceNet)

@@ -13,8 +13,8 @@ from face_recognizer import FaceRecognizer
 
 # ---------------- Config ----------------
 MODEL_NAME = 'Facenet'
-SIMILARITY_THRESHOLD = 0.9
-STABLE_FRAMES = 10
+SIMILARITY_THRESHOLD = 0.85
+STABLE_FRAMES = 15
 DATA_DIR = "face_embeddings"
 embeddings_path = os.path.join(DATA_DIR, "embeddings.pkl")
 user_info_path = os.path.join(DATA_DIR, "user_info.csv")
@@ -114,13 +114,12 @@ def flush_attendance():
     except Exception as e:
         logging.error(f"Failed to write attendance CSV for session {current_session_id}: {e}")
 
-# ---------------- Recognition thread ----------------
-# The FaceRecognizer implementation should expose:
-# - recognize_faces() -> target for background thread
-# - result_lock -> threading.Lock used to synchronize access to recognizer.frame and recognizer.draw_faces
-# - draw_faces -> list of (box, identity, similarity, last_seen)
-# - frame attribute writable by GUI process_frame
-# - stop_threads flag to ask thread to stop
+
+# --- Smoothing/Tracking for Face Boxes ---
+# This dict will store the last seen detection for each identity (or box hash for unknowns)
+_last_seen_faces = {}
+# How long (seconds) to keep drawing a box after last detection
+_SMOOTHING_SECONDS = 1.0
 
 
 # ---------------- Public API (for GUI) ----------------
@@ -129,7 +128,7 @@ def start_session(session_id=None, student_ids=None):
     Called from GUI when session begins. Resets marks and sets session active.
     If student_ids is provided, reload embeddings for only those students.
     """
-    global session_active, marked_names, all_embeddings, all_labels, recognizer, recognition_thread, current_session_id
+    global session_active, marked_names, all_embeddings, all_labels, recognizer, current_session_id
     session_active = True
     marked_names = set()
     current_session_id = session_id
@@ -138,10 +137,8 @@ def start_session(session_id=None, student_ids=None):
         all_embeddings, all_labels = loader.load_embeddings(from_db=True, student_ids=student_ids)
     else:
         all_embeddings, all_labels = loader.load_embeddings(from_db=True)
-    # (Re)create recognizer with correct args
+    # (Re)create recognizer with correct args (worker thread starts automatically)
     recognizer = FaceRecognizer(MODEL_NAME, all_embeddings, all_labels, similarity_threshold=SIMILARITY_THRESHOLD, stable_frames=STABLE_FRAMES)
-    recognition_thread = threading.Thread(target=recognizer.recognize_faces, daemon=True)
-    recognition_thread.start()
     logging.info(f"rec_faces: session started (session_id={session_id}) with {len(all_embeddings)} embeddings for students: {set(all_labels)}")
 
 def end_session():
@@ -166,54 +163,99 @@ def process_frame(frame):
     """
     global marked_names, attendance_buffer
     recognized_names = []
+    # --- FPS Counter ---
+    if not hasattr(process_frame, "_last_time"):
+        process_frame._last_time = time.time()
+        process_frame._fps = 0.0
+        process_frame._frame_count = 0
+        process_frame._fps_update_interval = 1.0  # seconds
+        process_frame._last_fps_update = time.time()
+    process_frame._frame_count += 1
+    now_time = time.time()
+    elapsed = now_time - process_frame._last_fps_update
+    if elapsed >= process_frame._fps_update_interval:
+        process_frame._fps = process_frame._frame_count / elapsed
+        process_frame._frame_count = 0
+        process_frame._last_fps_update = now_time
 
-    # Update shared frame for recognition (non-blocking if recognizer not ready)
+
+    # Submit frame for recognition (non-blocking)
     try:
-        with recognizer.result_lock:
-            recognizer.frame = frame.copy()
+        # Flip camera horizontally for mirror effect in live view
+        frame = cv2.flip(frame, 1)
+        recognizer.submit_frame(frame.copy())
     except Exception:
-        # recognizer may not be fully initialized; ignore
         pass
 
-    # Copy draw_faces snapshot
-    try:
-        with recognizer.result_lock:
-            draw_snapshot = list(recognizer.draw_faces)
-    except Exception:
-        draw_snapshot = []
 
-    # Iterate detections and draw
+    # Get latest recognition results
+    draw_snapshot = []
+    try:
+        draw_snapshot = recognizer.get_latest_result() or []
+    except Exception:
+        pass
+
+    now = time.time()
+    global _last_seen_faces
+    # Update _last_seen_faces with new detections
+    # Only one box per identity, and only one for 'Unknown' (largest box)
+    unknown_best = None
     for detection in draw_snapshot:
         try:
             box, identity, similarity, last_seen = detection
-            # box expected to be (x, y, w, h)
+            if identity != "Unknown":
+                # Always keep only the latest for each identity
+                _last_seen_faces[identity] = (box, identity, similarity, now)
+            else:
+                # For unknowns, keep the largest box (by area)
+                area = box[2] * box[3]
+                if unknown_best is None or area > unknown_best[0][2] * unknown_best[0][3]:
+                    unknown_best = (box, identity, similarity, now)
+        except Exception as e:
+            print(f"[DEBUG] Error updating last seen: {e}")
+            continue
+    # Store only one 'Unknown' face (if any)
+    if unknown_best:
+        _last_seen_faces['Unknown'] = unknown_best
+    else:
+        _last_seen_faces.pop('Unknown', None)
+
+    # Remove stale faces
+    _last_seen_faces = {k: v for k, v in _last_seen_faces.items() if now - v[3] <= _SMOOTHING_SECONDS}
+
+    print(f"[DEBUG] Faces to draw (smoothed): {len(_last_seen_faces)}")
+
+    # Draw all faces seen recently
+    for detection in _last_seen_faces.values():
+        try:
+            box, identity, similarity, last_seen = detection
             x, y, w, h = box
-            # Draw rectangle
+            print(f"[DEBUG] Drawing box at ({x},{y},{w},{h}) for {identity} sim={similarity:.2f}")
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            # Draw label
             label_text = f"{identity} {similarity:.2f}"
             cv2.putText(frame, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
             # Attendance marking: require session active, not Unknown, not already marked, and high confidence
             if session_active and identity != "Unknown" and identity not in marked_names and similarity >= 0.85:
                 try:
-                    # Save attendance to DB
                     db_manager.add_attendance_record(current_session_id, identity, float(similarity))
                     marked_names.add(identity)
                     logging.info(f"rec_faces: Marked attendance for {identity} (saved to DB)")
                     recognized_names.append(identity)
                 except Exception as e:
                     logging.error(f"Failed to save attendance for {identity}: {e}")
-        except Exception:
-            # ignore malformed detection entries
+        except Exception as e:
+            print(f"[DEBUG] Error drawing detection: {e}")
             continue
 
-    # Overlay system info
+    # Overlay system info and FPS
     try:
         cpu = psutil.cpu_percent(interval=None)
         mem = psutil.virtual_memory().percent
         perf_text = f"CPU: {cpu:.0f}%  MEM: {mem:.0f}%"
         cv2.putText(frame, perf_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        fps_text = f"FPS: {process_frame._fps:.1f}"
+        cv2.putText(frame, fps_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
     except Exception:
         pass
 
@@ -230,8 +272,8 @@ def cleanup():
     except Exception:
         pass
     try:
-        if recognition_thread.is_alive():
-            recognition_thread.join(timeout=2.0)
+        # No need to join recognition_thread; worker thread is managed by FaceRecognizer
+        pass
     except Exception:
         pass
     flush_attendance()

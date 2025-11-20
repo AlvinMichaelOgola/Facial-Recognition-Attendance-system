@@ -7,7 +7,135 @@ import csv
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'change_this_secret_key')
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:8080"}}, supports_credentials=True)
+# DEVELOPMENT ONLY: Allow all origins for CORS
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+
+# --- Student Roster for a Class ---
+@app.route('/api/lecturer/class/<int:class_id>/students', methods=['GET'])
+def get_class_student_roster(class_id):
+	try:
+		conn = get_db_connection()
+		cursor = conn.cursor(dictionary=True)
+		cursor.execute('''
+			SELECT s.student_id, u.first_name, u.last_name, u.email
+			FROM class_students_two cs
+			JOIN students s ON cs.student_id = s.student_id
+			JOIN users u ON s.user_id = u.id
+			WHERE cs.class_id = %s
+		''', (class_id,))
+		students = [
+			{
+				'id': row['student_id'],
+				'name': f"{row['first_name']} {row['last_name']}",
+				'email': row['email']
+			}
+			for row in cursor.fetchall()
+		]
+		cursor.close()
+		conn.close()
+		return jsonify(students)
+	except Exception as e:
+		return jsonify({'error': f'Failed to fetch student roster: {str(e)}'}), 500
+
+# --- Top 5 Most Absent Students for a Class ---
+@app.route('/api/lecturer/class/<int:class_id>/top_absent', methods=['GET'])
+def get_class_top_absent_students(class_id):
+	try:
+		conn = get_db_connection()
+		cursor = conn.cursor(dictionary=True)
+		# Get all students in the class
+		cursor.execute('''
+			SELECT s.student_id, u.first_name, u.last_name
+			FROM class_students_two cs
+			JOIN students s ON cs.student_id = s.student_id
+			JOIN users u ON s.user_id = u.id
+			WHERE cs.class_id = %s
+		''', (class_id,))
+		students = {row['student_id']: f"{row['first_name']} {row['last_name']}" for row in cursor.fetchall()}
+
+		# Count absences for each student in this class (confidence = 0 means absent)
+		cursor.execute('''
+			SELECT ar.student_id, COUNT(*) as absences
+			FROM attendance_records_two ar
+			JOIN attendance_sessions_two sess ON ar.session_id = sess.id
+			WHERE sess.class_id = %s AND ar.confidence = 0
+			GROUP BY ar.student_id
+			ORDER BY absences DESC
+			LIMIT 5
+		''', (class_id,))
+		top_absent = []
+		for row in cursor.fetchall():
+			name = students.get(row['student_id'], row['student_id'])
+			top_absent.append({
+				'name': name,
+				'absences': row['absences']
+			})
+		cursor.close()
+		conn.close()
+		return jsonify(top_absent)
+	except Exception as e:
+		return jsonify({'error': f'Failed to fetch top absent students: {str(e)}'}), 500
+from flask import Flask, request, jsonify, send_file, session
+from flask_cors import CORS
+import mysql.connector
+import hashlib
+import os
+import csv
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'change_this_secret_key')
+# DEVELOPMENT ONLY: Allow all origins for CORS
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+# To allow more origins, add them to the list above. For production, set to your deployed frontend URL.
+
+
+# --- Lecturer Classes List (for dashboard) ---
+@app.route('/api/lecturer/classes/list', methods=['GET'])
+def get_lecturer_classes_list():
+	lecturer_id = request.args.get('lecturer_id')
+	print(f"[DEBUG] /api/lecturer/classes/list called with lecturer_id={lecturer_id}")
+	if not lecturer_id:
+		print("[DEBUG] lecturer_id missing in request")
+		return jsonify({'error': 'lecturer_id required'}), 400
+	try:
+		conn = get_db_connection()
+		cursor = conn.cursor(dictionary=True)
+		# Get all classes for this lecturer
+		cursor.execute("""
+			SELECT c.id, c.code, c.class_name, c.start_time, c.end_time, c.room, c.date
+			FROM classes_two c
+			WHERE c.lecturer_id = %s
+		""", (lecturer_id,))
+		classes = cursor.fetchall()
+		print(f"[DEBUG] Classes fetched: {classes}")
+		# For each class, get student count
+		for cls in classes:
+			cursor.execute("SELECT COUNT(*) as student_count FROM class_students_two WHERE class_id = %s", (cls['id'],))
+			cls['student_count'] = cursor.fetchone()['student_count']
+			# Optionally, add attendance rate if you want (set to None for now)
+			cls['attendance_rate'] = None
+		print(f"[DEBUG] Classes with student counts: {classes}")
+		# Convert non-serializable fields
+		for cls in classes:
+			# Convert start_time and end_time (timedelta) to HH:MM
+			for key in ["start_time", "end_time"]:
+				val = cls.get(key)
+				if val is not None:
+					# val is timedelta, convert to HH:MM
+					total_seconds = int(val.total_seconds())
+					hours = total_seconds // 3600
+					minutes = (total_seconds % 3600) // 60
+					cls[key] = f"{hours:02d}:{minutes:02d}"
+			# Convert date to YYYY-MM-DD
+			if cls.get("date") is not None:
+				cls["date"] = str(cls["date"])
+		cursor.close()
+		conn.close()
+		return jsonify(classes)
+	except Exception as e:
+		print(f"[DEBUG] Exception in get_lecturer_classes_list: {e}")
+		return jsonify({'error': f'Failed to fetch classes list: {str(e)}'}), 500
+
 
 db_config = {
 	'host': 'localhost',
@@ -92,14 +220,57 @@ def get_class_details(class_id):
 	try:
 		conn = get_db_connection()
 		cursor = conn.cursor(dictionary=True)
-		cursor.execute("SELECT * FROM classes WHERE class_id = %s", (class_id,))
+		# Get class info (try classes_two first, fallback to classes)
+		cursor.execute("SELECT * FROM classes_two WHERE id = %s", (class_id,))
 		class_info = cursor.fetchone()
-		# Add analytics as needed
+		if not class_info:
+			cursor.execute("SELECT * FROM classes WHERE class_id = %s", (class_id,))
+			class_info = cursor.fetchone()
+			if not class_info:
+				cursor.close()
+				conn.close()
+				return jsonify({'error': 'Class not found'}), 404
+
+		# Student count
+		cursor.execute("SELECT COUNT(*) as student_count FROM class_students_two WHERE class_id = %s", (class_id,))
+		student_count = cursor.fetchone()['student_count']
+
+		# Session count
+		cursor.execute("SELECT COUNT(*) as session_count FROM attendance_sessions_two WHERE class_id = %s", (class_id,))
+		session_count = cursor.fetchone()['session_count']
+
+		# Attendance rate (present/total)
+		cursor.execute("SELECT id FROM attendance_sessions_two WHERE class_id = %s", (class_id,))
+		session_ids = [row['id'] for row in cursor.fetchall()]
+		attendance_rate = 0.0
+		present = 0
+		total = 0
+		if session_ids:
+			format_strings = ','.join(['%s'] * len(session_ids))
+			cursor.execute(f"SELECT COUNT(*) as total FROM attendance_records_two WHERE session_id IN ({format_strings})", tuple(session_ids))
+			total = cursor.fetchone()['total']
+			cursor.execute(f"SELECT COUNT(*) as present FROM attendance_records_two WHERE session_id IN ({format_strings}) AND present_at IS NOT NULL AND present_at != ''", tuple(session_ids))
+			present = cursor.fetchone()['present']
+			attendance_rate = (present / total * 100) if total > 0 else 0.0
+
+		# Compose response
+		result = {
+			'id': class_info.get('id') or class_info.get('class_id'),
+			'code': class_info.get('code') or class_info.get('class_code'),
+			'title': class_info.get('class_name') or class_info.get('title'),
+			'room': class_info.get('room'),
+			'date': str(class_info.get('date')) if class_info.get('date') else None,
+			'start_time': str(class_info.get('start_time')) if class_info.get('start_time') else None,
+			'end_time': str(class_info.get('end_time')) if class_info.get('end_time') else None,
+			'student_count': student_count,
+			'session_count': session_count,
+			'attendance_rate': round(attendance_rate, 2),
+			'present': present,
+			'total': total
+		}
 		cursor.close()
 		conn.close()
-		if not class_info:
-			return jsonify({'error': 'Class not found'}), 404
-		return jsonify(class_info)
+		return jsonify(result)
 	except Exception as e:
 		return jsonify({'error': f'Failed to fetch class details: {str(e)}'}), 500
 
@@ -169,7 +340,9 @@ def download_attendance_csv():
 @app.route('/api/lecturer/students', methods=['GET'])
 def get_lecturer_students():
 	lecturer_id = request.args.get('lecturer_id')
+	print(f"[DEBUG] /api/lecturer/students called with lecturer_id={lecturer_id}")
 	if not lecturer_id:
+		print("[DEBUG] lecturer_id missing in request")
 		return jsonify({'error': 'lecturer_id required'}), 400
 	try:
 		conn = get_db_connection()
@@ -182,11 +355,55 @@ def get_lecturer_students():
 			WHERE c.lecturer_id = %s
 		""", (lecturer_id,))
 		result = cursor.fetchone()
+		print(f"[DEBUG] Total students found: {result[0] if result else 0}")
 		cursor.close()
 		conn.close()
 		return jsonify({'total_students': result[0] if result else 0})
 	except Exception as e:
+		print(f"[DEBUG] Exception in get_lecturer_students: {e}")
 		return jsonify({'error': f'Failed to fetch students: {str(e)}'}), 500
+
+# --- Students List for Lecturer ---
+@app.route('/api/lecturer/students/list', methods=['GET'])
+def get_lecturer_students_list():
+	lecturer_id = request.args.get('lecturer_id')
+	print(f"[DEBUG] /api/lecturer/students/list called with lecturer_id={lecturer_id}")
+	if not lecturer_id:
+		print("[DEBUG] lecturer_id missing in request")
+		return jsonify({'error': 'lecturer_id required'}), 400
+	try:
+		conn = get_db_connection()
+		cursor = conn.cursor(dictionary=True)
+		# Get students assigned to lecturer's classes, joining through students and users
+		cursor.execute("""
+			SELECT cs.student_id, u.first_name, u.last_name, u.email, c.class_name
+			FROM class_students_two cs
+			JOIN students s ON cs.student_id = s.student_id
+			JOIN users u ON s.user_id = u.id
+			JOIN classes_two c ON cs.class_id = c.id
+			WHERE c.lecturer_id = %s
+		""", (lecturer_id,))
+		rows = cursor.fetchall()
+		print(f"[DEBUG] Number of student rows fetched: {len(rows)}")
+		# Aggregate classes for each student
+		students = {}
+		for row in rows:
+			sid = row['student_id']
+			if sid not in students:
+				students[sid] = {
+					'student_id': sid,
+					'full_name': f"{row['first_name']} {row['last_name']}",
+					'email': row['email'],
+					'enrolled_classes': []
+				}
+			students[sid]['enrolled_classes'].append(row['class_name'])
+		print(f"[DEBUG] Number of unique students aggregated: {len(students)}")
+		cursor.close()
+		conn.close()
+		return jsonify(list(students.values()))
+	except Exception as e:
+		print(f"[DEBUG] Exception in get_lecturer_students_list: {e}")
+		return jsonify({'error': f'Failed to fetch students list: {str(e)}'}), 500
 
 # --- Notifications ---
 @app.route('/api/lecturer/notifications', methods=['POST'])

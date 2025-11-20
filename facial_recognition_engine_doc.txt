@@ -1,0 +1,58 @@
+
+Facial Recognition Engine: Current State & Technology (as of November 2025)
+============================================================
+
+Overview
+--------
+The facial recognition engine powers real-time, automated attendance marking by matching live webcam images to stored face data. It is designed for speed, robustness, and reliability, supporting both small classrooms and larger deployments.
+
+Core Technologies
+-----------------
+- **Python 3**: Main language for all recognition logic.
+- **OpenCV**: For webcam image capture and preprocessing.
+- **DeepFace (FaceNet model)**: For generating high-quality face embeddings.
+- **MTCNN**: For accurate face detection in images.
+- **scikit-learn cosine_similarity**: For matching embeddings using cosine similarity (brute-force search).
+- **NumPy**: For efficient numerical operations on embeddings.
+- **Threading & Queue**: For parallel frame processing, ensuring UI responsiveness and real-time performance.
+
+Recognition Pipeline
+--------------------
+1. **Image Capture**: Frames are captured from the webcam using OpenCV.
+2. **Face Detection**: MTCNN locates faces in each frame.
+3. **Embedding Generation**: DeepFace (FaceNet) computes a normalized embedding for each detected face.
+4. **Embedding Search**: 
+   - All stored embeddings are compared to the new embedding using brute-force cosine similarity (scikit-learn).
+   - The embedding with the highest similarity is selected as the match.
+   - If the similarity exceeds a configurable threshold, the identity is assigned; otherwise, the face is marked as "Unknown".
+5. **Result Smoothing**: Detected identities are tracked and smoothed over several frames to avoid flicker and false positives.
+
+Key Features
+------------
+- **Parallel Processing**: Frame submission and recognition run in separate threads for real-time speed.
+- **Dynamic Embedding Updates**: Embeddings and labels can be updated at runtime.
+- **Error Handling**: All errors are logged; recognition continues even if some faces fail to process.
+
+Relevant Files
+--------------
+- `face_recognizer.py`: Implements the recognition engine, cosine similarity search, and threading logic.
+- `rec_faces.py`: Manages session logic, overlays, and smoothing/tracking of recognized faces.
+- `add_faces.py`: Handles face registration and embedding storage.
+
+Recent Improvements (Nov 2025)
+------------------------------
+- Improved overlay smoothing: only one box per identity, stable tracking, no overlap.
+- Refactored threading for robust parallel frame processing.
+- Enhanced error handling and debug output for easier troubleshooting.
+
+Dependencies
+------------
+- `opencv-python`
+- `deepface`
+- `mtcnn`
+- `scikit-learn`
+- `numpy`
+
+See `requirements.txt` for full list.
+
+For further technical details, see the source files or request a deeper breakdown of any module.

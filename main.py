@@ -1,6 +1,4 @@
 # main.py
-
-
 import tkinter as tk
 from gui import Application
 import threading

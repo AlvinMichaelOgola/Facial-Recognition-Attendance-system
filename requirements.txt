@@ -64,3 +64,21 @@ BSc in Statistics and Data Science (BScSDS)
 Bachelor of Commerce (BCOM)
 
 
+List of terminals and their uses
+XAMPP Control Panel - To run Apache and MySQL servers
+Admin Panel - For managing the application and user accounts
+Lecturer Panel - Start and stop attendance sessions
+API (STUDENT AND LECTURER DASHBOARDS) - For accessing the application programmatically
+
+
+TO do
+
+1. Implement the 'my classes' feature for lecturers to view and manage their classes.
+1b. Implement the 'Students' feature for lecturers to view and manage their students.   
+2. refactor the recognition algorithm.
+3. Drop down in the student edit menu in the admin panel.
+4. reports
+5. When i unasign a class, iit does not remove it from the lecturer
+
+11/11/25
+made changes to the core FRS logic
