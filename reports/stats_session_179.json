@@ -1,0 +1,22 @@
+{
+    "session_id": 179,
+    "timestamp": "2025-11-22 16:15:49",
+    "duration_seconds": 49.99,
+    "performance": {
+        "average_fps": 13.45,
+        "average_cpu_usage": 44.46,
+        "total_frames_processed": 583
+    },
+    "detection_stats": {
+        "total_faces_seen": 70,
+        "known_faces": 60,
+        "unknown_faces": 10,
+        "recognition_rate": "85.71%"
+    },
+    "attendance": {
+        "total_marked": 1,
+        "marked_ids": [
+            "10061"
+        ]
+    }
+}

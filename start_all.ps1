@@ -1,10 +1,15 @@
 # PowerShell script to start all servers for RollCall FRS
 
 # Start API server (Python, venv activated)
-Start-Process powershell -ArgumentList '-NoExit', '-Command', '.\.venv\Scripts\Activate; python lecturer_api.py' -WorkingDirectory $PWD
 
 # Start React/Vite frontend (npm run dev)
-Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd academe-view-suite; npm run dev' -WorkingDirectory $PWD
 
 # (Optional) Start Admin Panel API server
-# Start-Process powershell -ArgumentList '-NoExit', '-Command', '.\.venv\Scripts\Activate; python admin_api.py' -WorkingDirectory $PWD
+
+# Activate the virtual environment, then run main.py and lec_main.py in new windows
+
+# Start main.py in a new PowerShell window with venv activated
+Start-Process powershell -ArgumentList '-NoExit', '-Command', '. .\.venv\Scripts\Activate.ps1; python main.py'
+
+# Start lec_main.py in a new PowerShell window with venv activated
+Start-Process powershell -ArgumentList '-NoExit', '-Command', '. .\.venv\Scripts\Activate.ps1; python lec_main.py'

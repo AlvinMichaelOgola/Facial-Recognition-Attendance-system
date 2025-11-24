@@ -47,13 +47,13 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+yes=1
 # Configure your SMTP server details here
-
-SMTP_SERVER = 'smtp.gmail.com'
-SMTP_PORT = 587
-SENDER_EMAIL = 'cargoconnect084@gmail.com'
-SENDER_PASSWORD = 'pkyb knsp atnb rmip'
-
+if(yes==1):
+    SMTP_SERVER = 'smtp.gmail.com'
+    SMTP_PORT = 587
+    SENDER_EMAIL = 'cargoconnect08@gmail.com'
+    SENDER_PASSWORD = 'pkyb knsp atnb rmip'
 
 # --- HTML Email Templates ---
 WELCOME_TEMPLATE = '''

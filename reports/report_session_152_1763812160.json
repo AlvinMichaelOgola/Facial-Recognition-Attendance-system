@@ -1,0 +1,22 @@
+{
+    "session_id": 152,
+    "date": "2025-11-22 14:49:20",
+    "duration_seconds": 14.22,
+    "performance": {
+        "average_fps": 11.93,
+        "average_cpu_usage": 46.57,
+        "total_frames_processed": 149
+    },
+    "detection_stats": {
+        "total_face_detections": 16,
+        "recognized_instances": 16,
+        "unknown_instances": 0,
+        "recognition_rate_percent": 100.0
+    },
+    "attendance": {
+        "total_unique_students": 1,
+        "student_list": [
+            "10061"
+        ]
+    }
+}

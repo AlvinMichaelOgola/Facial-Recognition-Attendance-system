@@ -9,83 +9,6 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'change_this_secret_key')
 # DEVELOPMENT ONLY: Allow all origins for CORS
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
-
-# --- Student Roster for a Class ---
-@app.route('/api/lecturer/class/<int:class_id>/students', methods=['GET'])
-def get_class_student_roster(class_id):
-	try:
-		conn = get_db_connection()
-		cursor = conn.cursor(dictionary=True)
-		cursor.execute('''
-			SELECT s.student_id, u.first_name, u.last_name, u.email
-			FROM class_students_two cs
-			JOIN students s ON cs.student_id = s.student_id
-			JOIN users u ON s.user_id = u.id
-			WHERE cs.class_id = %s
-		''', (class_id,))
-		students = [
-			{
-				'id': row['student_id'],
-				'name': f"{row['first_name']} {row['last_name']}",
-				'email': row['email']
-			}
-			for row in cursor.fetchall()
-		]
-		cursor.close()
-		conn.close()
-		return jsonify(students)
-	except Exception as e:
-		return jsonify({'error': f'Failed to fetch student roster: {str(e)}'}), 500
-
-# --- Top 5 Most Absent Students for a Class ---
-@app.route('/api/lecturer/class/<int:class_id>/top_absent', methods=['GET'])
-def get_class_top_absent_students(class_id):
-	try:
-		conn = get_db_connection()
-		cursor = conn.cursor(dictionary=True)
-		# Get all students in the class
-		cursor.execute('''
-			SELECT s.student_id, u.first_name, u.last_name
-			FROM class_students_two cs
-			JOIN students s ON cs.student_id = s.student_id
-			JOIN users u ON s.user_id = u.id
-			WHERE cs.class_id = %s
-		''', (class_id,))
-		students = {row['student_id']: f"{row['first_name']} {row['last_name']}" for row in cursor.fetchall()}
-
-		# Count absences for each student in this class (confidence = 0 means absent)
-		cursor.execute('''
-			SELECT ar.student_id, COUNT(*) as absences
-			FROM attendance_records_two ar
-			JOIN attendance_sessions_two sess ON ar.session_id = sess.id
-			WHERE sess.class_id = %s AND ar.confidence = 0
-			GROUP BY ar.student_id
-			ORDER BY absences DESC
-			LIMIT 5
-		''', (class_id,))
-		top_absent = []
-		for row in cursor.fetchall():
-			name = students.get(row['student_id'], row['student_id'])
-			top_absent.append({
-				'name': name,
-				'absences': row['absences']
-			})
-		cursor.close()
-		conn.close()
-		return jsonify(top_absent)
-	except Exception as e:
-		return jsonify({'error': f'Failed to fetch top absent students: {str(e)}'}), 500
-from flask import Flask, request, jsonify, send_file, session
-from flask_cors import CORS
-import mysql.connector
-import hashlib
-import os
-import csv
-
-app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'change_this_secret_key')
-# DEVELOPMENT ONLY: Allow all origins for CORS
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 # To allow more origins, add them to the list above. For production, set to your deployed frontend URL.
 
 
@@ -217,62 +140,127 @@ def get_lecturer_classes():
 # --- Class Details & Analytics ---
 @app.route('/api/lecturer/class/<int:class_id>', methods=['GET'])
 def get_class_details(class_id):
-	try:
-		conn = get_db_connection()
-		cursor = conn.cursor(dictionary=True)
-		# Get class info (try classes_two first, fallback to classes)
-		cursor.execute("SELECT * FROM classes_two WHERE id = %s", (class_id,))
-		class_info = cursor.fetchone()
-		if not class_info:
-			cursor.execute("SELECT * FROM classes WHERE class_id = %s", (class_id,))
-			class_info = cursor.fetchone()
-			if not class_info:
-				cursor.close()
-				conn.close()
-				return jsonify({'error': 'Class not found'}), 404
+    try:
+        print(f"[DEBUG] /api/lecturer/class/<id> called with class_id={class_id}")
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        # Get class info
+        cursor.execute('SELECT id, class_name, code FROM classes_two WHERE id = %s', (class_id,))
+        class_info = cursor.fetchone()
+        print(f"[DEBUG] class_info: {class_info}")
+        if not class_info:
+            cursor.close()
+            conn.close()
+            print("[DEBUG] Class not found for id", class_id)
+            return jsonify({'error': 'Class not found'}), 404
 
-		# Student count
-		cursor.execute("SELECT COUNT(*) as student_count FROM class_students_two WHERE class_id = %s", (class_id,))
-		student_count = cursor.fetchone()['student_count']
+        # Get total students
+        cursor.execute('SELECT COUNT(*) as total_students FROM class_students_two WHERE class_id = %s', (class_id,))
+        total_students = cursor.fetchone()['total_students']
+        print(f"[DEBUG] total_students: {total_students}")
+        class_info['total_students'] = total_students
 
-		# Session count
-		cursor.execute("SELECT COUNT(*) as session_count FROM attendance_sessions_two WHERE class_id = %s", (class_id,))
-		session_count = cursor.fetchone()['session_count']
 
-		# Attendance rate (present/total)
-		cursor.execute("SELECT id FROM attendance_sessions_two WHERE class_id = %s", (class_id,))
-		session_ids = [row['id'] for row in cursor.fetchall()]
-		attendance_rate = 0.0
-		present = 0
-		total = 0
-		if session_ids:
-			format_strings = ','.join(['%s'] * len(session_ids))
-			cursor.execute(f"SELECT COUNT(*) as total FROM attendance_records_two WHERE session_id IN ({format_strings})", tuple(session_ids))
-			total = cursor.fetchone()['total']
-			cursor.execute(f"SELECT COUNT(*) as present FROM attendance_records_two WHERE session_id IN ({format_strings}) AND present_at IS NOT NULL AND present_at != ''", tuple(session_ids))
-			present = cursor.fetchone()['present']
-			attendance_rate = (present / total * 100) if total > 0 else 0.0
+        # Get sessions held (count unique sessions for this class)
+        cursor.execute('SELECT COUNT(*) as sessions_held FROM attendance_sessions_two WHERE class_id = %s', (class_id,))
+        sessions_held = cursor.fetchone()['sessions_held']
+        print(f"[DEBUG] sessions_held: {sessions_held}")
+        class_info['sessions_held'] = sessions_held
 
-		# Compose response
-		result = {
-			'id': class_info.get('id') or class_info.get('class_id'),
-			'code': class_info.get('code') or class_info.get('class_code'),
-			'title': class_info.get('class_name') or class_info.get('title'),
-			'room': class_info.get('room'),
-			'date': str(class_info.get('date')) if class_info.get('date') else None,
-			'start_time': str(class_info.get('start_time')) if class_info.get('start_time') else None,
-			'end_time': str(class_info.get('end_time')) if class_info.get('end_time') else None,
-			'student_count': student_count,
-			'session_count': session_count,
-			'attendance_rate': round(attendance_rate, 2),
-			'present': present,
-			'total': total
-		}
-		cursor.close()
-		conn.close()
-		return jsonify(result)
-	except Exception as e:
-		return jsonify({'error': f'Failed to fetch class details: {str(e)}'}), 500
+        # Get attendance stats for pie chart and rate (join sessions)
+        cursor.execute('''
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN ar.present_at IS NOT NULL THEN 1 ELSE 0 END) as present,
+                   SUM(CASE WHEN ar.present_at IS NULL THEN 1 ELSE 0 END) as absent
+            FROM attendance_records_two ar
+            JOIN attendance_sessions_two s ON ar.session_id = s.id
+            WHERE s.class_id = %s
+        ''', (class_id,))
+        stats = cursor.fetchone()
+        print(f"[DEBUG] attendance_stats: {stats}")
+        class_info['attendance_stats'] = {
+            'present': stats['present'] or 0,
+            'absent': stats['absent'] or 0,
+            'total': stats['total'] or 0
+        }
+        # Attendance rate as percentage
+        if stats['total']:
+            attendance_rate = round((stats['present'] or 0) / stats['total'] * 100, 2)
+        else:
+            attendance_rate = 0.0
+        print(f"[DEBUG] attendance_rate: {attendance_rate}")
+        class_info['attendance_rate'] = attendance_rate
+
+        cursor.close()
+        conn.close()
+        print(f"[DEBUG] Final class_info response: {class_info}")
+        return jsonify(class_info)
+    except Exception as e:
+        print(f"[DEBUG] Exception in get_class_details: {e}")
+        return jsonify({'error': f'Failed to fetch class details: {str(e)}'}), 500
+
+# --- Student Roster API ---
+@app.route('/api/lecturer/class/<int:class_id>/students', methods=['GET'])
+def get_class_student_roster(class_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('''
+            SELECT s.student_id, u.first_name, u.last_name, u.email
+            FROM class_students_two cs
+            JOIN students s ON cs.student_id = s.student_id
+            JOIN users u ON s.user_id = u.id
+            WHERE cs.class_id = %s
+        ''', (class_id,))
+        students = [
+            {
+                'id': row['student_id'],
+                'name': f"{row['first_name']} {row['last_name']}",
+                'email': row['email']
+            }
+            for row in cursor.fetchall()
+        ]
+        cursor.close()
+        conn.close()
+        return jsonify(students)
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch student roster: {str(e)}'}), 500
+
+# --- Top Absentees API ---
+@app.route('/api/lecturer/class/<int:class_id>/top_absent', methods=['GET'])
+def get_class_top_absent_students(class_id):
+    try:
+        print(f"[DEBUG] /api/lecturer/class/<id>/top_absent called with class_id={class_id}")
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('''
+            SELECT s.student_id, u.first_name, u.last_name, COUNT(*) as absences
+            FROM attendance_records_two ar
+            JOIN attendance_sessions_two sess ON ar.session_id = sess.id
+            JOIN students s ON ar.student_id = s.student_id
+            JOIN users u ON s.user_id = u.id
+            WHERE sess.class_id = %s AND ar.present_at IS NULL
+            GROUP BY s.student_id
+            ORDER BY absences DESC
+            LIMIT 5
+        ''', (class_id,))
+        rows = cursor.fetchall()
+        print(f"[DEBUG] top_absent raw rows: {rows}")
+        absentees = [
+            {
+                'id': row['student_id'],
+                'name': f"{row['first_name']} {row['last_name']}",
+                'absences': row['absences']
+            }
+            for row in rows
+        ]
+        print(f"[DEBUG] top_absent absentees: {absentees}")
+        cursor.close()
+        conn.close()
+        return jsonify(absentees)
+    except Exception as e:
+        print(f"[DEBUG] Exception in get_class_top_absent_students: {e}")
+        return jsonify({'error': f'Failed to fetch top absentees: {str(e)}'}), 500
 
 # --- Attendance Records & Corrections ---
 @app.route('/api/lecturer/attendance/records', methods=['GET'])
@@ -576,6 +564,54 @@ def get_attendance_by_class():
     except Exception as e:
         print(f"[ERROR] Failed to fetch attendance by class: {e}")
         return jsonify({'error': f'Failed to fetch attendance by class: {str(e)}'}), 500
+
+# --- Recent Attendance Sessions ---
+@app.route('/api/lecturer/recent_sessions', methods=['GET'])
+def get_recent_sessions():
+    lecturer_id = request.args.get('lecturer_id')
+    if not lecturer_id:
+        return jsonify({'error': 'Missing lecturer_id'}), 400
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        # Get last 5 sessions for this lecturer
+        cursor.execute('''
+            SELECT sess.id AS session_id, sess.started_at, c.class_name
+            FROM attendance_sessions_two sess
+            JOIN classes_two c ON sess.class_id = c.id
+            WHERE sess.lecturer_id = %s
+            ORDER BY sess.started_at DESC
+            LIMIT 5
+        ''', (lecturer_id,))
+        sessions = cursor.fetchall()
+        result = []
+        for sess in sessions:
+            session_id = sess['session_id']
+            # Count present and absent
+            cursor.execute('''
+                SELECT 
+                    SUM(CASE WHEN ar.present_at IS NOT NULL THEN 1 ELSE 0 END) AS present,
+                    SUM(CASE WHEN ar.present_at IS NULL THEN 1 ELSE 0 END) AS absent
+                FROM attendance_records_two ar
+                WHERE ar.session_id = %s
+            ''', (session_id,))
+            counts = cursor.fetchone()
+            present = counts['present'] or 0
+            absent = counts['absent'] or 0
+            total = present + absent
+            rate = f"{(present / total * 100):.0f}%" if total > 0 else "0%"
+            result.append({
+                'class': sess['class_name'],
+                'date': sess['started_at'].strftime('%Y-%m-%d %H:%M'),
+                'present': present,
+                'absent': absent,
+                'rate': rate
+            })
+        cursor.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch recent sessions: {str(e)}'}), 500
 
 if __name__ == '__main__':
 	app.run(debug=True, port=5001)

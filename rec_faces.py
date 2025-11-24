@@ -1,4 +1,3 @@
-# rec_faces.py
 import os
 import time
 import datetime
@@ -6,19 +5,28 @@ import threading
 import logging
 import psutil
 import cv2
+import math
+import sys
+import numpy as np
+import json
+from deepface import DeepFace 
 
+# --- Custom Project Modules ---
 from embedding_loader import EmbeddingLoader
 from user_data_manager import UserDataManager
 from face_recognizer import FaceRecognizer
+from camera_utils import initialize_camera
 
 # ---------------- Config ----------------
 MODEL_NAME = 'Facenet'
-SIMILARITY_THRESHOLD = 0.85
-STABLE_FRAMES = 15
+SIMILARITY_THRESHOLD = 0.75
+STABLE_FRAMES = 8 
+ROI_SIZE = 400
+BLUR_THRESHOLD = 100
+
 DATA_DIR = "face_embeddings"
-embeddings_path = os.path.join(DATA_DIR, "embeddings.pkl")
-user_info_path = os.path.join(DATA_DIR, "user_info.csv")
 os.makedirs('data', exist_ok=True)
+os.makedirs('reports', exist_ok=True)
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
@@ -26,254 +34,300 @@ logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 db_manager = UserDataManager()
 loader = EmbeddingLoader(db_manager=db_manager.db_manager)
 recognizer = None
-all_embeddings = None
-all_labels = None
 
 # ---------------- Attendance State ----------------
-# session_active will be toggled by GUI start/end calls
-
 session_active = False
 marked_names = set()
-attendance_buffer = []
-BUFFER_SIZE = 5
 current_session_id = None
-
-def flush_attendance():
-    """
-    On session end, write only the current session's attendance records to the CSV with proper columns, overwriting previous content.
-    """
-    import csv
-    global current_session_id
-    try:
-        records = db_manager.get_attendance_for_session(current_session_id)
-        fieldnames = [
-            'student_id', 'first_name', 'last_name', 'course', 'present_at', 'confidence', 'status'
-        ]
-        # Fetch session and class info for filename
-        session_info = db_manager.get_session_by_id(current_session_id)
-        class_info = db_manager.get_class_by_id(session_info['class_id']) if session_info else None
-        # Fetch lecturer name
-        lecturer_name = "lecturer"
-        if session_info and session_info.get('lecturer_id'):
-            try:
-                lec = db_manager.get_lecturer_by_id(session_info['lecturer_id'])
-                if lec:
-                    first = lec.get('first_name') or ''
-                    last = lec.get('last_name') or ''
-                    lecturer_name = f"{first}_{last}".strip('_')
-            except Exception:
-                pass
-        session_name = session_info['name'] if session_info and session_info.get('name') else f'session_{current_session_id}'
-        class_name = class_info['class_name'] if class_info and class_info.get('class_name') else 'unknown_class'
-        date_str = session_info['started_at'].strftime('%Y-%m-%d') if session_info and session_info.get('started_at') else time.strftime('%Y-%m-%d')
-        # Sanitize for filename
-        def sanitize(s):
-            return ''.join(c for c in str(s) if c.isalnum() or c in ('-_')).rstrip()
-        session_name_safe = sanitize(session_name).replace(' ', '_')
-        class_name_safe = sanitize(class_name).replace(' ', '_')
-        lecturer_name_safe = sanitize(lecturer_name).replace(' ', '_')
-        session_csv = os.path.join('data', f'attendance_{date_str}_{lecturer_name_safe}_{class_name_safe}_{current_session_id}.csv')
-
-        # Get all students assigned to this class
-        all_students = db_manager.get_students_for_class(class_info['id']) if class_info and class_info.get('id') else []
-        # Map attendance records by student_id
-        attendance_map = {rec.get('student_id'): rec for rec in records}
-
-        with open(session_csv, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            if all_students:
-                for student in all_students:
-                    rec = attendance_map.get(student['student_id'])
-                    if rec:
-                        status = 'Present' if rec.get('present_at') else 'Absent'
-                        writer.writerow({
-                            'student_id': rec.get('student_id'),
-                            'first_name': rec.get('first_name'),
-                            'last_name': rec.get('last_name'),
-                            'course': rec.get('course'),
-                            'present_at': rec.get('present_at'),
-                            'confidence': rec.get('confidence'),
-                            'status': status
-                        })
-                    else:
-                        # No attendance record: mark as Absent
-                        writer.writerow({
-                            'student_id': student.get('student_id'),
-                            'first_name': student.get('first_name'),
-                            'last_name': student.get('last_name'),
-                            'course': student.get('course'),
-                            'present_at': '',
-                            'confidence': '',
-                            'status': 'Absent'
-                        })
-            else:
-                # Write a message row if no students assigned
-                writer.writerow({k: 'NO STUDENTS ASSIGNED' if k == 'student_id' else '' for k in fieldnames})
-        logging.info(f"Wrote attendance records for session {current_session_id} to {session_csv}")
-    except Exception as e:
-        logging.error(f"Failed to write attendance CSV for session {current_session_id}: {e}")
-
-
-# --- Smoothing/Tracking for Face Boxes ---
-# This dict will store the last seen detection for each identity (or box hash for unknowns)
 _last_seen_faces = {}
-# How long (seconds) to keep drawing a box after last detection
-_SMOOTHING_SECONDS = 1.0
+_SMOOTHING_SECONDS = 0.3 
 
+# --- STATISTICS TRACKER ---
+session_stats = {
+    "start_time": 0,
+    "total_frames": 0,
+    "total_detections": 0,
+    "total_knowns": 0,
+    "total_unknowns": 0,
+    "fps_history": [],
+    "cpu_history": []
+}
 
-# ---------------- Public API (for GUI) ----------------
+# ---------------- Core Logic ----------------
+
 def start_session(session_id=None, student_ids=None):
-    """
-    Called from GUI when session begins. Resets marks and sets session active.
-    If student_ids is provided, reload embeddings for only those students.
-    """
-    global session_active, marked_names, all_embeddings, all_labels, recognizer, current_session_id
+    """Initializes the AI engine and resets stats."""
+    global session_active, marked_names, recognizer, current_session_id, session_stats
     session_active = True
     marked_names = set()
     current_session_id = session_id
-    # Always reload embeddings for the session (required for recognizer init)
-    if student_ids is not None:
-        all_embeddings, all_labels = loader.load_embeddings(from_db=True, student_ids=student_ids)
-    else:
-        all_embeddings, all_labels = loader.load_embeddings(from_db=True)
-    # (Re)create recognizer with correct args (worker thread starts automatically)
-    recognizer = FaceRecognizer(MODEL_NAME, all_embeddings, all_labels, similarity_threshold=SIMILARITY_THRESHOLD, stable_frames=STABLE_FRAMES)
-    logging.info(f"rec_faces: session started (session_id={session_id}) with {len(all_embeddings)} embeddings for students: {set(all_labels)}")
+    
+    # Reset Stats
+    session_stats = {
+        "start_time": time.time(),
+        "total_frames": 0,
+        "total_detections": 0,
+        "total_knowns": 0,
+        "total_unknowns": 0,
+        "fps_history": [],
+        "cpu_history": []
+    }
+    
+    # 1. Load Student Data
+    print(f"[INFO] Loading Student Database for Session {session_id}...")
+    try:
+        if student_ids:
+            try:
+                all_embeddings, all_labels = loader.load_embeddings(from_db=True, student_ids=student_ids)
+            except TypeError:
+                all_embeddings, all_labels = loader.load_embeddings(from_db=True)
+        else:
+            all_embeddings, all_labels = loader.load_embeddings(from_db=True)
+    except Exception as e:
+        print(f"[ERROR] Failed to load embeddings: {e}")
+        all_embeddings, all_labels = [], []
+
+    # 2. PRE-LOAD MODEL
+    print("[INFO] Pre-loading FaceNet Model...")
+    try:
+        DeepFace.build_model(MODEL_NAME) 
+    except Exception as e:
+        print(f"[WARN] Model build warning: {e}")
+    
+    # 3. Initialize Worker
+    recognizer = FaceRecognizer(
+        MODEL_NAME, 
+        all_embeddings, 
+        all_labels, 
+        similarity_threshold=SIMILARITY_THRESHOLD, 
+        stable_frames=STABLE_FRAMES
+    )
+    logging.info(f"Session {session_id} started.")
 
 def end_session():
-    """
-    Called from GUI when session ends. Flushes buffer and disables marking.
-    """
+    """Stops the AI engine and saves a detailed performance report."""
     global session_active
     session_active = False
-    flush_attendance()
-    cleanup()
-    logging.info("rec_faces: session ended, buffer flushed, and recognition thread stopped")
+    if recognizer:
+        recognizer.stop_threads = True
+    
+    # --- GENERATE REPORT ---
+    try:
+        duration = time.time() - session_stats["start_time"]
+        
+        # Calculate Averages
+        avg_fps = np.mean(session_stats["fps_history"]) if session_stats["fps_history"] else 0
+        avg_cpu = np.mean(session_stats["cpu_history"]) if session_stats["cpu_history"] else 0
+        
+        # Calculate Recognition Rate
+        total = session_stats["total_detections"]
+        rec_rate = (session_stats["total_knowns"] / total * 100) if total > 0 else 0
+
+        report_data = {
+            "session_id": current_session_id,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_seconds": round(duration, 2),
+            "performance": {
+                "average_fps": round(avg_fps, 2),
+                "average_cpu_usage": round(avg_cpu, 2),
+                "total_frames_processed": session_stats["total_frames"]
+            },
+            "detection_stats": {
+                "total_faces_seen": session_stats["total_detections"],
+                "known_faces": session_stats["total_knowns"],
+                "unknown_faces": session_stats["total_unknowns"],
+                "recognition_rate": f"{rec_rate:.2f}%"
+            },
+            "attendance": {
+                "total_marked": len(marked_names),
+                "marked_ids": list(marked_names)
+            }
+        }
+        
+        report_path = f"reports/stats_session_{current_session_id}.json"
+        with open(report_path, "w") as f:
+            json.dump(report_data, f, indent=4)
+            
+        print(f"[INFO] Performance report saved to {report_path}")
+        
+    except Exception as e:
+        print(f"[WARN] Failed to save statistics report: {e}")
 
 def process_frame(frame):
     """
-    Integration point for GUI:
-    - Accepts a BGR OpenCV frame (numpy array)
-    - Sends the frame copy to the recognizer via recognizer.frame (protected by result_lock)
-    - Reads recognizer.draw_faces (protected by result_lock) and draws boxes/labels on the provided frame
-    - Performs attendance marking (buffered) and returns any newly marked identities
-    Returns:
-        processed_frame (BGR image with overlays), recognized_names (list of identities that were newly marked)
+    Processes a frame. GUARANTEED to return (frame, list) even on error.
     """
-    global marked_names, attendance_buffer
-    recognized_names = []
-    # --- FPS Counter ---
-    if not hasattr(process_frame, "_last_time"):
-        process_frame._last_time = time.time()
-        process_frame._fps = 0.0
-        process_frame._frame_count = 0
-        process_frame._fps_update_interval = 1.0  # seconds
-        process_frame._last_fps_update = time.time()
-    process_frame._frame_count += 1
-    now_time = time.time()
-    elapsed = now_time - process_frame._last_fps_update
-    if elapsed >= process_frame._fps_update_interval:
-        process_frame._fps = process_frame._frame_count / elapsed
-        process_frame._frame_count = 0
-        process_frame._last_fps_update = now_time
+    global marked_names, _last_seen_faces, session_stats
+    newly_marked = []
+    
+    # --- FPS Tracking Init ---
+    if not hasattr(process_frame, "last_time"):
+        process_frame.last_time = time.time()
+    
+    # --- SAFETY GUARD 1: Check for Empty Frame ---
+    if frame is None or frame.size == 0:
+        return frame, []
 
-
-    # Submit frame for recognition (non-blocking)
     try:
-        # Flip camera horizontally for mirror effect in live view
+        # --- PERFORMANCE TRACKING ---
+        now = time.time()
+        dt = now - process_frame.last_time
+        process_frame.last_time = now
+        
+        if dt > 0:
+            current_fps = 1.0 / dt
+            session_stats["fps_history"].append(current_fps)
+            session_stats["cpu_history"].append(psutil.cpu_percent())
+            session_stats["total_frames"] += 1
+
+        # 1. Mirror Effect
         frame = cv2.flip(frame, 1)
-        recognizer.submit_frame(frame.copy())
-    except Exception:
-        pass
+        h, w, _ = frame.shape
 
+        # 2. ROI Calculation
+        roi_w, roi_h = min(ROI_SIZE, w), min(ROI_SIZE, h)
+        start_x = (w - roi_w) // 2
+        start_y = (h - roi_h) // 2
+        end_x = start_x + roi_w
+        end_y = start_y + roi_h
 
-    # Get latest recognition results
-    draw_snapshot = []
-    try:
-        draw_snapshot = recognizer.get_latest_result() or []
-    except Exception:
-        pass
+        # 3. Scanning Animation
+        scan_speed = 4.0
+        scan_offset = int((math.sin(time.time() * scan_speed) + 1) / 2 * roi_h)
+        scan_y = start_y + scan_offset
+        
+        cv2.rectangle(frame, (start_x, start_y), (end_x, end_y), (255, 150, 0), 2)
+        cv2.line(frame, (start_x, scan_y), (end_x, scan_y), (255, 150, 0), 2)
+        cv2.putText(frame, "ATTENDANCE ACTIVE", (start_x + 10, start_y - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 0), 2)
 
-    now = time.time()
-    global _last_seen_faces
-    # Update _last_seen_faces with new detections
-    # Only one box per identity, and only one for 'Unknown' (largest box)
-    unknown_best = None
-    for detection in draw_snapshot:
+        # 4. Prepare Crop for AI
+        roi_crop = frame[start_y:end_y, start_x:end_x]
+        
         try:
-            box, identity, similarity, last_seen = detection
-            if identity != "Unknown":
-                # Always keep only the latest for each identity
-                _last_seen_faces[identity] = (box, identity, similarity, now)
+            gray_roi = cv2.cvtColor(roi_crop, cv2.COLOR_BGR2GRAY)
+            blur_score = cv2.Laplacian(gray_roi, cv2.CV_64F).var()
+            
+            if blur_score > BLUR_THRESHOLD:
+                lab = cv2.cvtColor(roi_crop, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                cl = clahe.apply(l)
+                roi_enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
+                
+                roi_rgb = cv2.cvtColor(roi_enhanced, cv2.COLOR_BGR2RGB)
+                if recognizer:
+                    recognizer.submit_frame(roi_rgb)
             else:
-                # For unknowns, keep the largest box (by area)
-                area = box[2] * box[3]
-                if unknown_best is None or area > unknown_best[0][2] * unknown_best[0][3]:
-                    unknown_best = (box, identity, similarity, now)
-        except Exception as e:
-            print(f"[DEBUG] Error updating last seen: {e}")
-            continue
-    # Store only one 'Unknown' face (if any)
-    if unknown_best:
-        _last_seen_faces['Unknown'] = unknown_best
-    else:
-        _last_seen_faces.pop('Unknown', None)
+                cv2.putText(frame, "HOLD STILL", (start_x + 10, end_y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        except Exception:
+            pass
 
-    # Remove stale faces
-    _last_seen_faces = {k: v for k, v in _last_seen_faces.items() if now - v[3] <= _SMOOTHING_SECONDS}
+        # 5. Get Results (SAFETY GUARD 2: Handle None Result)
+        draw_snapshot = []
+        if recognizer:
+            res = recognizer.get_latest_result()
+            if res is not None:
+                draw_snapshot = res
 
-    print(f"[DEBUG] Faces to draw (smoothed): {len(_last_seen_faces)}")
+        now_ts = time.time()
+        current_faces = {} 
 
-    # Draw all faces seen recently
-    for detection in _last_seen_faces.values():
+        for detection in draw_snapshot:
+            try:
+                box, identity, similarity, last_seen = detection
+                rx, ry, rw, rh = box
+                gx = rx + start_x
+                gy = ry + start_y
+                current_faces[identity] = ((gx, gy, rw, rh), identity, similarity, now_ts)
+                _last_seen_faces[identity] = current_faces[identity]
+                
+                # --- STATS UPDATE ---
+                session_stats["total_detections"] += 1
+                if identity == "Unknown":
+                    session_stats["total_unknowns"] += 1
+                else:
+                    session_stats["total_knowns"] += 1
+                    
+            except Exception:
+                continue
+
+        _last_seen_faces = {k: v for k, v in _last_seen_faces.items() if now_ts - v[3] <= _SMOOTHING_SECONDS}
+
+        for detection in _last_seen_faces.values():
+            try:
+                box, identity, similarity, last_seen = detection
+                x, y, bw, bh = box
+                
+                color = (0, 0, 255)
+                status_text = f"{similarity:.2f}"
+                
+                if identity in marked_names:
+                    color = (0, 255, 0)
+                    status_text = "PRESENT"
+                elif identity != "Unknown":
+                    color = (0, 255, 255)
+                
+                cv2.rectangle(frame, (x, y), (x + bw, y + bh), color, 2)
+                cv2.putText(frame, f"{identity}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                cv2.putText(frame, status_text, (x, y + bh + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+                if session_active and identity != "Unknown" and identity not in marked_names and similarity >= SIMILARITY_THRESHOLD:
+                    try:
+                        db_manager.add_attendance_record(current_session_id, identity, float(similarity))
+                        marked_names.add(identity)
+                        newly_marked.append(identity)
+                        logging.info(f"Marked: {identity}")
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
         try:
-            box, identity, similarity, last_seen = detection
-            x, y, w, h = box
-            print(f"[DEBUG] Drawing box at ({x},{y},{w},{h}) for {identity} sim={similarity:.2f}")
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            label_text = f"{identity} {similarity:.2f}"
-            cv2.putText(frame, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cpu = psutil.cpu_percent(interval=None)
+            fps_disp = f"FPS: {current_fps:.1f}" if 'current_fps' in locals() else "FPS: --"
+            cv2.putText(frame, f"CPU: {cpu}% | {fps_disp}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        except Exception:
+            pass
 
-            # Attendance marking: require session active, not Unknown, not already marked, and high confidence
-            if session_active and identity != "Unknown" and identity not in marked_names and similarity >= 0.85:
-                try:
-                    db_manager.add_attendance_record(current_session_id, identity, float(similarity))
-                    marked_names.add(identity)
-                    logging.info(f"rec_faces: Marked attendance for {identity} (saved to DB)")
-                    recognized_names.append(identity)
-                except Exception as e:
-                    logging.error(f"Failed to save attendance for {identity}: {e}")
-        except Exception as e:
-            print(f"[DEBUG] Error drawing detection: {e}")
+        return frame, newly_marked
+
+    except Exception as e:
+        # --- SAFETY GUARD 3: Catastrophic Failure Handler ---
+        print(f"[CRITICAL ERROR in process_frame]: {e}")
+        return frame, []
+
+# ---------------- Window Loop ----------------
+def start_gui_session(session_id, camera_index=0):
+    start_session(session_id)
+    cap, _, _ = initialize_camera(prefer_droidcam=(camera_index==1))
+    
+    if not cap: return
+
+    window_name = f"Session {session_id}"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    while True:
+        ret, frame = cap.read()
+        if not ret: break
+        
+        processed_frame, new_names = process_frame(frame)
+        
+        if processed_frame is None: 
             continue
 
-    # Overlay system info and FPS
-    try:
-        cpu = psutil.cpu_percent(interval=None)
-        mem = psutil.virtual_memory().percent
-        perf_text = f"CPU: {cpu:.0f}%  MEM: {mem:.0f}%"
-        cv2.putText(frame, perf_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        fps_text = f"FPS: {process_frame._fps:.1f}"
-        cv2.putText(frame, fps_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-    except Exception:
-        pass
+        cv2.imshow(window_name, processed_frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
 
-    return frame, recognized_names
+    end_session()
+    cap.release()
+    cv2.destroyAllWindows()
 
-def get_marked_names():
-    """Return a copy of marked names set."""
-    return set(marked_names)
-
-def cleanup():
-    """Stop recognizer thread and flush buffers."""
-    try:
-        recognizer.stop_threads = True
-    except Exception:
-        pass
-    try:
-        # No need to join recognition_thread; worker thread is managed by FaceRecognizer
-        pass
-    except Exception:
-        pass
-    flush_attendance()
+if __name__ == "__main__":
+    import sys
+    sid = 101
+    cam = 0
+    if len(sys.argv) > 1: sid = sys.argv[1]
+    if len(sys.argv) > 2: cam = int(sys.argv[2])
+    start_gui_session(sid, cam)
